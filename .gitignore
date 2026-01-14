@@ -54,3 +54,7 @@ cache/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated files
+temp/
+debug_issue.py
