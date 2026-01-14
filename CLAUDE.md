@@ -20,66 +20,110 @@ Our RLM:       Long Doc -> Pre-index (TOC/structure) -> REPL -> scoped search ->
 
 ---
 
+## Spec-Driven Development
+
+This project uses a spec-driven development workflow with 4 phases:
+
+```
+Requirements -> Design -> Tasks -> Implementation
+```
+
+### Phases
+
+| Phase | Purpose | Output |
+|-------|---------|--------|
+| **Requirements** | Define WHAT to build | User stories, functional requirements, constraints |
+| **Design** | Define HOW to build | Architecture, API design, data structures, tech decisions |
+| **Tasks** | Define WHEN to build | Task breakdown with dependencies, 25 tasks for single-doc |
+| **Implementation** | BUILD it | Working code, tests |
+
+### Spec Commands
+
+| Command | Description |
+|---------|-------------|
+| `/spec:new <name>` | Create new specification |
+| `/spec:requirements` | Generate requirements document |
+| `/spec:design` | Generate design document |
+| `/spec:tasks` | Generate task breakdown |
+| `/spec:approve <phase>` | Approve a phase (requirements/design/tasks) |
+| `/spec:status` | Show current spec status |
+| `/spec:switch <name>` | Switch to different spec |
+| `/spec:implement` | Start implementation mode |
+| `/spec:update-task` | Update task status |
+
+### Spec Directory Structure
+
+```
+spec/
+  .current-spec                    # Active spec name
+  001-single-doc-flow/
+    README.md                      # Status dashboard
+    requirements.md                # Phase 1: What to build
+    design.md                      # Phase 2: How to build
+    tasks.md                       # Phase 3: Task breakdown
+    .requirements-approved         # Approval marker
+    .design-approved               # Approval marker
+    .tasks-approved                # Approval marker
+```
+
+### Current Spec: 001-single-doc-flow
+
+**Status**: Tasks ready for approval, then implementation
+
+**Key Design Decisions**:
+- **markitdown**: Convert PDF/DOCX/HTML to markdown uniformly
+- **litellm**: Unified LLM access (OpenAI/Anthropic/Gemini)
+- **Tiered TOC**: Regex -> lightweight LLM -> single section fallback
+- **Contextual Retrieval**: Anthropic technique for section summaries
+- **REPL**: 11 FREE functions + 2 sub-LLM functions
+
+---
+
 ## Project Structure
 
 ```
 C:/code/rlm/
     CLAUDE.md                        # This file - project instructions
     recursive_language_models.pdf    # Original paper
+    requirements.txt                 # Dependencies: litellm, markitdown
 
-    # Specifications
+    # Reference Specifications (original planning docs)
     SPEC_SINGLE_DOC.md              # Single document approach
     SPEC_MULTI_DOC.md               # Multi-document corpus approach
     SPEC_BENCHMARKS.md              # Evaluation benchmarks
 
-    # Source Code (to be implemented)
+    # Spec-Driven Development (active specs)
+    spec/
+        .current-spec               # Active spec pointer
+        001-single-doc-flow/        # First implementation spec
+
+    # Source Code
     src/
         __init__.py
         single_doc/                  # Single document RLM
             __init__.py
-            indexer.py              # TOC generation, section mapping
-            repl.py                 # REPL environment
-            rlm.py                  # Main RLM class
-        multi_doc/                   # Multi-document RLM
-            __init__.py
-            corpus_indexer.py       # Corpus-level indexing
-            doc_indexer.py          # Per-document indexing
-            repl.py                 # REPL environment
-            rlm.py                  # Main RLM class
-        llm/
-            __init__.py
-            base.py                 # LLM interface
-            openai.py               # OpenAI implementation
-            anthropic.py            # Anthropic implementation
+            converter.py            # markitdown wrapper (PDF/DOCX -> MD)
+            indexer.py              # TOC parsing, contextual summaries
+            repl.py                 # REPL functions + code executor
+            rlm.py                  # Main SingleDocRLM class
         utils/
             __init__.py
-            token_counter.py        # Track token usage
-            cache.py                # Caching utilities
-
-    # Benchmarks
-    benchmarks/
-        download.py                 # Download benchmark datasets
-        runner.py                   # Benchmark evaluation harness
-        metrics.py                  # Scoring functions
-
-    # Data (downloaded benchmarks)
-    data/
-        oolong/
-        browsecomp/
-        longbench/
-        ruler/
-
-    # Results
-    results/
-        experiments.json
-        plots/
+            token_counter.py        # Track token usage via litellm
 
     # Tests
     tests/
-        test_single_doc.py
-        test_multi_doc.py
-        test_benchmarks.py
+        test_indexer.py
+        test_repl.py
+        test_integration.py
+
+    # Data (downloaded benchmarks - gitignored)
+    data/
+
+    # Results (gitignored)
+    results/
 ```
+
+**Note**: Uses `litellm` for all LLM calls (no separate openai/anthropic modules needed).
 
 ---
 
