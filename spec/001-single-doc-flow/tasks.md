@@ -1,8 +1,8 @@
 # Tasks: Single-doc-flow
 
 > Phase 3 of Spec-Driven Development
-> Status: Draft
-> Last Updated: 2026-01-14
+> Status: APPROVED
+> Approved: 2026-01-14
 > Prerequisites: [Design Approved]
 
 ## Summary

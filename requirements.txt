@@ -1,0 +1,14 @@
+# RLM Dependencies
+
+# LLM Access - unified interface for OpenAI/Anthropic/Gemini
+litellm>=1.0.0
+
+# Document Conversion - PDF/DOCX/HTML to Markdown
+markitdown>=0.1.0
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Type checking (optional)
+# mypy>=1.0.0
