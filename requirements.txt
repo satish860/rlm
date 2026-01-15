@@ -3,6 +3,10 @@
 # LLM Access - unified interface for OpenAI/Anthropic/Gemini
 litellm>=1.0.0
 
+# Structured Output - guaranteed JSON extraction with Pydantic validation
+instructor>=1.0.0
+pydantic>=2.0.0
+
 # Document Conversion - PDF/DOCX/HTML to Markdown
 markitdown>=0.1.0
 

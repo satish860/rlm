@@ -1,0 +1,8 @@
+Approved: 2026-01-15
+
+Decisions made:
+- Large extractions: Split queries, multiple rounds
+- Instructor model: Internal detail, not user-configurable
+- Partial results: User choice via on_error parameter
+- Schema confirmation: Yes, ask user before proceeding
+- Summary styles: Current 4 styles sufficient

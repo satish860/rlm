@@ -6,13 +6,19 @@ the Recursive Language Model approach.
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Type, Literal
 
 import litellm
+from pydantic import BaseModel
 
-from .indexer import SingleDocIndex, build_index
+from .indexer import StructuredDocument, build_index
 from .repl import REPLExecutor, REPL_TOOLS, build_system_prompt
-from ..config import ROOT_MODEL, SUB_MODEL, TOC_MODEL, MAX_REPL_ROUNDS
+from .models import PaperList, FigureList, StructuredSummary
+from .errors import ExtractionError, SchemaGenerationError, UserCancelledError
+from .json_convert import convert_to_json, extract_partial_from_text
+from .schema_gen import generate_schema_from_description, confirm_schema_with_user
+from .prompt_builder import build_extraction_prompt, build_summary_prompt
+from ..config import ROOT_MODEL, SUB_MODEL, MAX_REPL_ROUNDS
 
 
 class SingleDocRLM:
@@ -30,23 +36,20 @@ class SingleDocRLM:
         doc_path: str,
         root_model: str = ROOT_MODEL,
         sub_model: str = SUB_MODEL,
-        toc_model: str = TOC_MODEL,
     ):
         """
         Initialize RLM for a document.
 
         Args:
             doc_path: Path to document (PDF/DOCX/HTML/TXT/MD)
-            root_model: Model for code generation (e.g., gpt-4o)
-            sub_model: Model for summaries/semantic tasks
-            toc_model: Lightweight model for TOC fallback
+            root_model: Model for code generation
+            sub_model: Model for segmentation/summaries/semantic tasks
         """
         self.doc_path = doc_path
         self.root_model = root_model
         self.sub_model = sub_model
-        self.toc_model = toc_model
 
-        self.index: Optional[SingleDocIndex] = None
+        self.index: Optional[StructuredDocument] = None
         self._executor: Optional[REPLExecutor] = None
         self._system_prompt: Optional[str] = None
 
@@ -56,7 +59,7 @@ class SingleDocRLM:
         generate_summaries: bool = True,
     ) -> None:
         """
-        Build document index (TOC, sections, summaries).
+        Build document index (sections, summaries).
 
         Args:
             output_dir: Directory for output files (default: same as source)
@@ -65,10 +68,8 @@ class SingleDocRLM:
         self.index = build_index(
             source_path=self.doc_path,
             output_dir=output_dir,
+            model=self.sub_model,
             generate_summaries=generate_summaries,
-            use_llm_toc_fallback=True,
-            toc_model=self.toc_model,
-            summary_model=self.sub_model,
         )
         self._executor = REPLExecutor(self.index, sub_model=self.sub_model)
         self._system_prompt = build_system_prompt(self.index)
@@ -82,7 +83,7 @@ class SingleDocRLM:
 
     def load_index(self, path: str) -> None:
         """Load index from JSON file."""
-        self.index = SingleDocIndex.load(path)
+        self.index = StructuredDocument.load(path)
         self._executor = REPLExecutor(self.index, sub_model=self.sub_model)
         self._system_prompt = build_system_prompt(self.index)
         print(f"Index loaded: {path}")
@@ -112,6 +113,9 @@ class SingleDocRLM:
             {"role": "user", "content": question},
         ]
 
+        # Accumulate outputs from execute_code calls (fallback if final_answer is empty)
+        accumulated_outputs = []
+
         for round_num in range(max_rounds):
             if verbose:
                 print(f"\n--- Round {round_num + 1} ---")
@@ -136,7 +140,13 @@ class SingleDocRLM:
                 # Process each tool call
                 for tool_call in assistant_message.tool_calls:
                     tool_name = tool_call.function.name
-                    tool_args = json.loads(tool_call.function.arguments)
+
+                    # Parse tool arguments (handle empty/malformed)
+                    try:
+                        raw_args = tool_call.function.arguments
+                        tool_args = json.loads(raw_args) if raw_args and raw_args.strip() else {}
+                    except json.JSONDecodeError:
+                        tool_args = {}
 
                     if verbose:
                         print(f"Tool: {tool_name}")
@@ -148,6 +158,10 @@ class SingleDocRLM:
 
                         # Execute code
                         output, _ = self._executor.execute_code(code)
+
+                        # Accumulate non-empty outputs
+                        if output and output.strip():
+                            accumulated_outputs.append(output)
 
                         if verbose:
                             # Safe print for Windows
@@ -167,6 +181,14 @@ class SingleDocRLM:
                         answer = tool_args.get("answer", "")
                         if verbose:
                             print(f"Final answer: {answer}")
+
+                        # If final_answer is empty but we have accumulated outputs, use those
+                        if not answer or not answer.strip():
+                            if accumulated_outputs:
+                                if verbose:
+                                    print("(Using accumulated outputs as fallback)")
+                                return "\n\n".join(accumulated_outputs)
+
                         return answer
 
             else:
@@ -183,6 +205,176 @@ class SingleDocRLM:
                 })
 
         return "Max rounds exceeded. Could not complete the query."
+
+    def extract(
+        self,
+        what: str,
+        response_model: Optional[Type[BaseModel]] = None,
+        on_error: Literal["raise", "partial"] = "raise",
+        verbose: bool = False,
+    ) -> list[dict]:
+        """
+        Extract structured data from document.
+
+        Three-stage pipeline:
+        - Stage 0: Generate schema from plain English (if response_model=None)
+        - Stage 1: Query document with extraction prompt
+        - Stage 2: Convert to JSON via Instructor
+
+        Args:
+            what: Description of what to extract (e.g., "papers", "all figures")
+            response_model: Pydantic model for output. If None, auto-generates from 'what'.
+            on_error: "raise" throws on failure, "partial" returns what was extracted
+            verbose: Print execution details
+
+        Returns:
+            List of extracted items as dictionaries
+
+        Raises:
+            ExtractionError: If extraction fails and on_error="raise"
+            SchemaGenerationError: If auto-schema generation fails
+            UserCancelledError: If user rejects generated schema
+
+        Example:
+            # Plain English (auto-generates schema)
+            papers = rlm.extract("all papers with title, authors, year, url")
+
+            # With Pydantic model (skips schema generation)
+            papers = rlm.extract("papers", response_model=PaperList)
+        """
+        if self.index is None or self._executor is None:
+            raise ValueError("No index built. Call build_index() or load_index() first.")
+
+        # Stage 0: Schema Generation (if needed)
+        if response_model is None:
+            if verbose:
+                print(f"Stage 0: Generating schema for '{what}'...")
+
+            response_model = generate_schema_from_description(what)
+
+            # Ask user to confirm the schema
+            if not confirm_schema_with_user(response_model, what):
+                raise UserCancelledError("User rejected the generated schema")
+
+        # Stage 1: Query document
+        if verbose:
+            print("Stage 1: Querying document...")
+
+        prompt = build_extraction_prompt(what, response_model)
+        free_text = self.query(prompt, verbose=verbose)
+
+        if verbose:
+            print(f"Stage 1 result: {len(free_text)} chars")
+
+        # Handle empty query result
+        if not free_text or not free_text.strip():
+            raise ExtractionError(
+                f"Query returned empty result for '{what}'. "
+                "The LLM may have found the content but failed to include it in the final answer. "
+                "Try running the query directly to debug."
+            )
+
+        # Stage 2: Convert to JSON
+        if verbose:
+            print("Stage 2: Converting to JSON...")
+
+        try:
+            result = convert_to_json(free_text, response_model)
+
+            # Extract items from the list wrapper
+            if hasattr(result, "items"):
+                return [item.model_dump() for item in result.items]
+            else:
+                return [result.model_dump()]
+
+        except Exception as e:
+            if on_error == "raise":
+                raise ExtractionError(f"Failed to extract {what}: {e}")
+            else:
+                # Try partial extraction
+                if verbose:
+                    print(f"Full extraction failed, trying partial: {e}")
+
+                # Get the item model from the list wrapper
+                item_model = self._get_item_model(response_model)
+                if item_model:
+                    partial = extract_partial_from_text(free_text, item_model)
+                    if verbose:
+                        print(f"Partial extraction got {len(partial)} items")
+                    return [item.model_dump() for item in partial]
+                return []
+
+    def _get_item_model(self, list_model: Type[BaseModel]) -> Optional[Type[BaseModel]]:
+        """Get the item model from a list wrapper model."""
+        from typing import get_origin, get_args
+
+        if "items" in list_model.model_fields:
+            items_field = list_model.model_fields["items"]
+            annotation = items_field.annotation
+            if get_origin(annotation) is list:
+                args = get_args(annotation)
+                if args:
+                    return args[0]
+        return None
+
+    def summarize(
+        self,
+        scope: str = "document",
+        style: Literal["paragraph", "bullets", "executive", "abstract"] = "paragraph",
+        max_length: int = 500,
+        structured: bool = False,
+        verbose: bool = False,
+    ) -> str | dict:
+        """
+        Summarize document or sections.
+
+        Args:
+            scope: What to summarize:
+                   - "document": entire document
+                   - "section:NAME": single section
+                   - "sections:A,B,C": multiple sections
+            style: Summary style ("paragraph", "bullets", "executive", "abstract")
+            max_length: Target word count
+            structured: If True, return dict instead of markdown
+            verbose: Print execution details
+
+        Returns:
+            Markdown string (structured=False) or dict (structured=True)
+
+        Example:
+            # Markdown summary
+            summary = rlm.summarize(scope="document", style="executive")
+
+            # Structured summary
+            data = rlm.summarize(scope="document", structured=True)
+        """
+        if self.index is None or self._executor is None:
+            raise ValueError("No index built. Call build_index() or load_index() first.")
+
+        # Stage 1: Query for summary
+        if verbose:
+            print(f"Summarizing {scope} in {style} style...")
+
+        prompt = build_summary_prompt(scope, style, max_length)
+        summary_text = self.query(prompt, verbose=verbose)
+
+        if not structured:
+            return summary_text
+
+        # Stage 2: Convert to structured format
+        if verbose:
+            print("Converting to structured format...")
+
+        result = convert_to_json(summary_text, StructuredSummary)
+        return result.model_dump()
+
+    def extract_papers(self, verbose: bool = False) -> list[dict]:
+        """Convenience method: Extract all referenced papers."""
+        return self.extract("referenced papers", response_model=PaperList, verbose=verbose)
+
+    def extract_figures(self, verbose: bool = False) -> list[dict]:
+        """Convenience method: Extract all figures with captions."""
+        return self.extract("figures with captions", response_model=FigureList, verbose=verbose)
 
     def interactive_repl(self) -> None:
         """

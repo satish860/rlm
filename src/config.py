@@ -8,18 +8,14 @@ Set OPENROUTER_API_KEY environment variable before use.
 # See available models at: https://openrouter.ai/models
 
 # Root LLM - generates code to explore documents (needs to be smart)
-ROOT_MODEL = "openrouter/anthropic/claude-sonnet-4"
+ROOT_MODEL = "openrouter/anthropic/claude-sonnet-4.5"
 
-# Sub LLM - handles semantic tasks like summaries (can be cheaper)
+# Sub LLM - segmentation, summaries, and other tasks
 SUB_MODEL = "openrouter/google/gemini-3-flash-preview"
 
-# TOC Model - lightweight model for TOC fallback when regex fails
-TOC_MODEL = "openrouter/google/gemini-2.0-flash-001"
-
-# Alternative models (uncomment to use)
-# ROOT_MODEL = "openrouter/anthropic/claude-sonnet-4"
-# SUB_MODEL = "openrouter/anthropic/claude-haiku"
-# TOC_MODEL = "openrouter/google/gemini-flash-1.5"
+# JSON conversion model - needs to work well with Instructor/structured output
+# GPT-4o-mini works reliably with Instructor for JSON extraction
+JSON_MODEL = "openrouter/openai/gpt-4o-mini"
 
 # Execution limits
 MAX_REPL_ROUNDS = 10  # Max iterations in query loop
