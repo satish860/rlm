@@ -11,7 +11,7 @@ from typing import Optional, Type, Literal
 import litellm
 from pydantic import BaseModel
 
-from .indexer import StructuredDocument, build_index
+from .indexer import StructuredDocument, build_index, build_index_from_text
 from .repl import REPLExecutor, REPL_TOOLS, build_system_prompt
 from .models import PaperList, FigureList, StructuredSummary
 from .errors import ExtractionError, SchemaGenerationError, UserCancelledError
@@ -87,6 +87,45 @@ class SingleDocRLM:
         self._executor = REPLExecutor(self.index, sub_model=self.sub_model)
         self._system_prompt = build_system_prompt(self.index)
         print(f"Index loaded: {path}")
+
+    @classmethod
+    def from_text(
+        cls,
+        text: str,
+        source_name: str = "raw_text",
+        root_model: str = ROOT_MODEL,
+        sub_model: str = SUB_MODEL,
+        generate_summaries: bool = True,
+    ) -> "SingleDocRLM":
+        """
+        Create RLM from raw text string.
+
+        Useful for benchmarks or when document is already in memory.
+
+        Args:
+            text: Raw text content
+            source_name: Name to identify this document
+            root_model: Model for code generation
+            sub_model: Model for segmentation/summaries
+            generate_summaries: Whether to generate contextual summaries
+
+        Returns:
+            SingleDocRLM instance with index already built
+        """
+        # Create instance with dummy path
+        instance = cls(doc_path=source_name, root_model=root_model, sub_model=sub_model)
+
+        # Build index from text directly
+        instance.index = build_index_from_text(
+            text=text,
+            source_name=source_name,
+            model=sub_model,
+            generate_summaries=generate_summaries,
+        )
+        instance._executor = REPLExecutor(instance.index, sub_model=sub_model)
+        instance._system_prompt = build_system_prompt(instance.index)
+
+        return instance
 
     def query(
         self,

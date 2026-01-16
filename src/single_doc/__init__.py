@@ -1,7 +1,7 @@
 """Single document RLM implementation."""
 
 from .rlm import SingleDocRLM, query_document
-from .indexer import SingleDocIndex, Section, build_index
+from .indexer import SingleDocIndex, Section, build_index, build_index_from_text
 from .converter import DocumentConverter
 
 # Extraction models
@@ -22,6 +22,7 @@ __all__ = [
     "SingleDocIndex",
     "Section",
     "build_index",
+    "build_index_from_text",
     "DocumentConverter",
     # Extraction models
     "Paper",

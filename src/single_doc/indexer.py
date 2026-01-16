@@ -1,617 +1,667 @@
 """Document indexer for single document RLM.
 
-Handles TOC parsing, section mapping, and contextual summary generation.
+Robust segmentation with:
+- Line markers for verifiable references
+- Chunked parallel processing
+- Coverage validation
+- Title verification
 """
 
-import json
+import os
 import re
-from dataclasses import dataclass, field, asdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
-import litellm
+import instructor
+from openai import OpenAI
+from pydantic import BaseModel, Field
 
-from ..config import TOC_MODEL, SUB_MODEL, MAX_SECTION_CHARS_FOR_SUMMARY, MAX_DOC_CHARS_FOR_CONTEXT
-
-
-@dataclass
-class Section:
-    """A document section with hierarchy info."""
-    title: str              # "3.2 Model Architecture"
-    level: int              # Heading level (1-6)
-    parent: Optional[str]   # Parent section title or None for top-level
-    start_char: int         # Start offset in markdown
-    end_char: int           # End offset in markdown
-
-    def __post_init__(self):
-        """Validate section data."""
-        if self.end_char < self.start_char:
-            raise ValueError(f"end_char ({self.end_char}) must be >= start_char ({self.start_char})")
+from ..config import SUB_MODEL, MAX_SECTION_CHARS_FOR_SUMMARY
 
 
-@dataclass
-class SingleDocIndex:
-    """Document index containing structure and summaries."""
+# =============================================================================
+# OpenRouter Client Setup
+# =============================================================================
 
-    source_path: str                           # Original document path
-    markdown_path: str                         # Path to converted markdown
-    total_chars: int                           # Total markdown size
-    sections: dict[str, Section] = field(default_factory=dict)  # title -> Section
-    summaries: dict[str, str] = field(default_factory=dict)     # title -> contextual summary
-    keywords: dict[str, list[str]] = field(default_factory=dict)  # title -> keywords
+def _get_openrouter_client():
+    """Get OpenAI client configured for OpenRouter."""
+    return OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+    )
 
-    def get_toc(self) -> list[dict]:
-        """Return TOC as list of dicts."""
-        return [
-            {
-                "title": s.title,
-                "level": s.level,
-                "parent": s.parent,
-                "start_char": s.start_char,
-                "end_char": s.end_char,
-            }
-            for s in self.sections.values()
-        ]
+
+def _get_instructor_client():
+    """Get Instructor client with JSON mode for structured outputs."""
+    return instructor.from_openai(
+        _get_openrouter_client(),
+        mode=instructor.Mode.JSON,
+    )
+
+
+def _strip_openrouter_prefix(model: str) -> str:
+    """Strip openrouter/ prefix if present."""
+    if model.startswith("openrouter/"):
+        return model[len("openrouter/"):]
+    return model
+
+
+# =============================================================================
+# Pydantic Models
+# =============================================================================
+
+class LineRange(BaseModel):
+    """Line range for a section."""
+    start: int = Field(..., description="Starting line number (0-indexed)")
+    end: int = Field(..., description="Ending line number (inclusive)")
+
+
+class DocumentSection(BaseModel):
+    """A section identified by LLM."""
+    title: str = Field(..., description="Section heading exactly as it appears")
+    description: str = Field(default="", description="Brief summary of section content")
+    line_range: LineRange = Field(..., description="Line range for this section")
+
+
+class Section(BaseModel):
+    """A document section with all metadata."""
+    title: str = Field(description="Section header/title")
+    start_index: int = Field(description="Start line number")
+    end_index: int = Field(description="End line number")
+    summary: str = Field(default="", description="Contextual summary of this section")
+    content: str = Field(default="", description="Actual text content of section")
+
+
+class StructuredDocument(BaseModel):
+    """Complete structured document with sections."""
+    source_path: str = Field(description="Original document path")
+    markdown_path: str = Field(description="Converted markdown path")
+    total_lines: int = Field(description="Total lines in document")
+    total_chars: int = Field(description="Total characters in document")
+    sections: list[Section] = Field(default_factory=list, description="Document sections")
+
+    @property
+    def summaries(self) -> dict[str, str]:
+        """Backward compatibility: summaries as dict."""
+        return self.get_all_summaries()
+
+    def get_section(self, title: str) -> Optional[Section]:
+        """Get section by title."""
+        for section in self.sections:
+            if section.title == title:
+                return section
+        return None
 
     def get_section_names(self) -> list[str]:
-        """Return list of section titles."""
-        return list(self.sections.keys())
+        """Get list of section titles."""
+        return [s.title for s in self.sections]
+
+    def get_all_summaries(self) -> dict[str, str]:
+        """Get all summaries as dict."""
+        return {s.title: s.summary for s in self.sections}
 
     def to_json(self) -> str:
-        """Serialize to JSON string."""
-        data = {
-            "source_path": self.source_path,
-            "markdown_path": self.markdown_path,
-            "total_chars": self.total_chars,
-            "sections": {
-                title: asdict(section)
-                for title, section in self.sections.items()
-            },
-            "summaries": self.summaries,
-            "keywords": self.keywords,
-        }
-        return json.dumps(data, indent=2)
+        """Serialize to JSON."""
+        return self.model_dump_json(indent=2)
 
     @classmethod
-    def from_json(cls, json_str: str) -> "SingleDocIndex":
-        """Deserialize from JSON string."""
-        data = json.loads(json_str)
-        sections = {
-            title: Section(**section_data)
-            for title, section_data in data["sections"].items()
-        }
-        return cls(
-            source_path=data["source_path"],
-            markdown_path=data["markdown_path"],
-            total_chars=data["total_chars"],
-            sections=sections,
-            summaries=data.get("summaries", {}),
-            keywords=data.get("keywords", {}),
-        )
+    def from_json(cls, json_str: str) -> "StructuredDocument":
+        """Deserialize from JSON."""
+        return cls.model_validate_json(json_str)
 
     def save(self, path: str) -> None:
-        """Save index to file."""
+        """Save to file."""
         Path(path).write_text(self.to_json(), encoding="utf-8")
 
     @classmethod
-    def load(cls, path: str) -> "SingleDocIndex":
-        """Load index from file."""
+    def load(cls, path: str) -> "StructuredDocument":
+        """Load from file."""
         json_str = Path(path).read_text(encoding="utf-8")
         return cls.from_json(json_str)
 
 
 # =============================================================================
-# TOC Parsing - Regex
+# LLM-Based Section Detection (with validation)
 # =============================================================================
 
-# Regex pattern for markdown headings: # Title, ## Title, etc.
-HEADING_PATTERN = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
-
-
-def parse_toc_regex(markdown_text: str) -> list[Section]:
-    """
-    Parse TOC from markdown using regex.
-
-    Extracts headings (#, ##, ###, etc.) and maps them to sections
-    with character offsets.
-
-    Args:
-        markdown_text: Markdown content
-
-    Returns:
-        List of Section objects (empty if no headings found)
-    """
-    sections = []
-
-    # Find all headings
-    matches = list(HEADING_PATTERN.finditer(markdown_text))
-
-    if not matches:
-        return []
-
-    # Build section list with start positions
-    for i, match in enumerate(matches):
-        level = len(match.group(1))  # Number of # characters
-        title = match.group(2).strip()
-        start_char = match.start()
-
-        # End is start of next section, or end of document
-        if i + 1 < len(matches):
-            end_char = matches[i + 1].start()
+def add_line_markers(text: str, interval: int = 100) -> str:
+    """Add line markers for verifiable LLM references."""
+    lines = text.split('\n')
+    marked = []
+    for i, line in enumerate(lines):
+        if i % interval == 0:
+            marked.append(f"[LINE:{i}] {line}")
         else:
-            end_char = len(markdown_text)
-
-        sections.append(Section(
-            title=title,
-            level=level,
-            parent=None,  # Will be filled in by _assign_parents
-            start_char=start_char,
-            end_char=end_char,
-        ))
-
-    # Assign parent relationships based on hierarchy
-    _assign_parents(sections)
-
-    return sections
+            marked.append(line)
+    return '\n'.join(marked)
 
 
-def _assign_parents(sections: list[Section]) -> None:
-    """
-    Assign parent sections based on heading levels.
+def segment_chunk_llm(
+    chunk_text: str,
+    start_line: int,
+    end_line: int,
+    model: str,
+) -> list[DocumentSection]:
+    """Segment a chunk of the document using LLM."""
 
-    A section's parent is the most recent section with a lower level number.
-    Example: ### is child of ##, which is child of #
+    client = _get_instructor_client()
+    model = _strip_openrouter_prefix(model)
 
-    Modifies sections in place.
-    """
-    # Stack of (level, title) for tracking hierarchy
-    stack: list[tuple[int, str]] = []
+    SYSTEM_PROMPT = """You are a document structure analyzer. Identify logical sections in the provided text.
 
-    for section in sections:
-        # Pop sections from stack that are same level or deeper
-        while stack and stack[-1][0] >= section.level:
-            stack.pop()
+CRITICAL REQUIREMENTS:
+1. Use the [LINE:X] markers to determine accurate line numbers
+2. Every line from start to end must be covered - NO GAPS
+3. Section titles must EXACTLY match headers/headings in the document
+4. Return consecutive line ranges that cover all lines
+5. Look for: chapter titles, section headers, numbered sections, topic changes"""
 
-        # Parent is top of stack (if any)
-        if stack:
-            section.parent = stack[-1][1]
-        else:
-            section.parent = None
+    USER_PROMPT = f"""Analyze this document chunk (lines {start_line} to {end_line}) and identify all sections.
 
-        # Push current section onto stack
-        stack.append((section.level, section.title))
-
-
-# =============================================================================
-# TOC Parsing - LLM Fallback
-# =============================================================================
-
-def parse_toc_llm(
-    markdown_text: str,
-    model: str = TOC_MODEL,
-) -> list[Section]:
-    """
-    Parse TOC using lightweight LLM when regex finds no headings.
-
-    Asks the LLM to identify major sections/chapters in the document.
-
-    Args:
-        markdown_text: Markdown content
-        model: LLM model to use (default: cheap/fast model)
-
-    Returns:
-        List of Section objects (empty if LLM can't identify structure)
-    """
-    # Use first portion of document for context
-    preview = markdown_text[:MAX_DOC_CHARS_FOR_CONTEXT]
-
-    prompt = f"""Analyze this document and identify its major sections or chapters.
+The text contains line markers in format [LINE:X] - use these for accurate line references.
 
 <document>
-{preview}
+{chunk_text}
 </document>
 
-Return a JSON array of sections with this format:
-[
-  {{"title": "Section Title", "line_number": 1}},
-  {{"title": "Another Section", "line_number": 50}}
-]
-
-Rules:
-- Only include major sections (not every paragraph)
-- line_number is the approximate line where the section starts
-- If the document has no clear sections, return an empty array []
-- Return ONLY the JSON array, no other text
-
-JSON:"""
+Requirements:
+- Cover ALL lines from {start_line} to {end_line} with no gaps
+- Section titles must exactly match headers in the text
+- Use [LINE:X] markers for accurate line numbers
+- Include a brief description of each section's content"""
 
     try:
-        response = litellm.completion(
+        response = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": USER_PROMPT}
+            ],
+            response_model=list[DocumentSection],
+            max_tokens=4000,
             temperature=0,
         )
-
-        content = response.choices[0].message.content.strip()
-
-        # Try to parse JSON from response
-        # Handle cases where LLM adds extra text
-        if "```" in content:
-            # Extract from code block
-            match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
-            if match:
-                content = match.group(1)
-
-        sections_data = json.loads(content)
-
-        if not sections_data:
-            return []
-
-        # Convert line numbers to character offsets
-        lines = markdown_text.split('\n')
-        line_to_char = _build_line_to_char_map(lines)
-
-        sections = []
-        for i, sec in enumerate(sections_data):
-            title = sec.get("title", f"Section {i+1}")
-            line_num = sec.get("line_number", 1)
-
-            # Convert line number to char offset
-            start_char = line_to_char.get(line_num, 0)
-
-            # End is start of next section or end of doc
-            if i + 1 < len(sections_data):
-                next_line = sections_data[i + 1].get("line_number", len(lines))
-                end_char = line_to_char.get(next_line, len(markdown_text))
-            else:
-                end_char = len(markdown_text)
-
-            sections.append(Section(
-                title=title,
-                level=1,  # LLM-identified sections are all level 1
-                parent=None,
-                start_char=start_char,
-                end_char=end_char,
-            ))
-
-        return sections
-
+        return response
     except Exception as e:
-        # If LLM fails, return empty list (will fall back to single section)
-        print(f"LLM TOC parsing failed: {e}")
+        print(f"  [ERROR] Chunk segmentation failed: {e}")
+        return [DocumentSection(
+            title=f"Content (lines {start_line}-{end_line})",
+            description="Unsegmented content",
+            line_range=LineRange(start=start_line, end=end_line)
+        )]
+
+
+def validate_coverage(sections: list[DocumentSection], total_lines: int) -> list[str]:
+    """Check for gaps in coverage."""
+    errors = []
+    if not sections:
+        return ["No sections found"]
+
+    sorted_sections = sorted(sections, key=lambda s: s.line_range.start)
+
+    # Check first section starts at 0 (or close to it)
+    if sorted_sections[0].line_range.start > 10:
+        errors.append(f"Gap at start: lines 0-{sorted_sections[0].line_range.start-1}")
+
+    # Check for gaps between sections
+    for i in range(len(sorted_sections) - 1):
+        current_end = sorted_sections[i].line_range.end
+        next_start = sorted_sections[i + 1].line_range.start
+        gap = next_start - current_end - 1
+        if gap > 5:  # Allow small gaps (empty lines)
+            errors.append(f"Gap: lines {current_end+1}-{next_start-1} ({gap} lines)")
+
+    # Check last section ends near total_lines
+    if sorted_sections[-1].line_range.end < total_lines - 20:
+        errors.append(f"Gap at end: lines {sorted_sections[-1].line_range.end+1}-{total_lines-1}")
+
+    return errors
+
+
+def validate_titles_exist(
+    sections: list[DocumentSection],
+    lines: list[str],
+) -> list[DocumentSection]:
+    """Verify section titles exist in document, fix line numbers if needed."""
+    validated = []
+
+    for section in sections:
+        title = section.title
+        claimed_start = section.line_range.start
+
+        # Search for title near claimed location (+/- 20 lines)
+        found_at = None
+        title_lower = title.lower().strip()
+
+        # First check exact line
+        if 0 <= claimed_start < len(lines):
+            if title_lower in lines[claimed_start].lower():
+                found_at = claimed_start
+
+        # Then search nearby
+        if found_at is None:
+            for offset in range(1, 30):
+                for direction in [1, -1]:
+                    check_line = claimed_start + (offset * direction)
+                    if 0 <= check_line < len(lines):
+                        if title_lower in lines[check_line].lower():
+                            found_at = check_line
+                            break
+                if found_at is not None:
+                    break
+
+        if found_at is not None and found_at != claimed_start:
+            # Fix the start line
+            offset = found_at - claimed_start
+            section.line_range.start = found_at
+            section.line_range.end = section.line_range.end + offset
+            print(f"  [FIX] '{title}' moved from line {claimed_start} to {found_at}")
+
+        validated.append(section)
+
+    return validated
+
+
+def deduplicate_sections(sections: list[DocumentSection]) -> list[DocumentSection]:
+    """Remove duplicate sections from overlapping chunks."""
+    if not sections:
         return []
 
+    seen_titles = {}
+    unique = []
 
-def _build_line_to_char_map(lines: list[str]) -> dict[int, int]:
-    """Build mapping from line number (1-indexed) to character offset."""
-    line_to_char = {1: 0}
-    char_pos = 0
+    for section in sorted(sections, key=lambda s: s.line_range.start):
+        # Normalize title for comparison
+        key = re.sub(r'\s+', ' ', section.title.lower().strip())
 
-    for i, line in enumerate(lines):
-        char_pos += len(line) + 1  # +1 for newline
-        line_to_char[i + 2] = char_pos  # Next line starts here
+        if key not in seen_titles:
+            seen_titles[key] = section
+            unique.append(section)
+        else:
+            # Keep existing (first occurrence)
+            pass
 
-    return line_to_char
+    return sorted(unique, key=lambda s: s.line_range.start)
 
 
-# =============================================================================
-# TOC Parsing - Tiered (Regex -> LLM -> Single Section)
-# =============================================================================
+def fix_section_boundaries(sections: list[DocumentSection], total_lines: int) -> list[DocumentSection]:
+    """Ensure sections have proper boundaries (no overlaps, no gaps)."""
+    if not sections:
+        return []
 
-def parse_toc(
+    sorted_sections = sorted(sections, key=lambda s: s.line_range.start)
+
+    # Fix first section to start at 0
+    if sorted_sections[0].line_range.start > 0:
+        sorted_sections[0].line_range.start = 0
+
+    # Fix boundaries between adjacent sections
+    for i in range(len(sorted_sections) - 1):
+        current = sorted_sections[i]
+        next_sec = sorted_sections[i + 1]
+
+        # Current section ends just before next section starts
+        current.line_range.end = next_sec.line_range.start - 1
+
+    # Fix last section to end at total_lines
+    sorted_sections[-1].line_range.end = total_lines - 1
+
+    return sorted_sections
+
+
+def segment_document_llm(
     markdown_text: str,
-    use_llm_fallback: bool = True,
-    llm_model: str = TOC_MODEL,
-) -> list[Section]:
+    model: str,
+    chunk_size: int = 800,
+    overlap: int = 100,
+    max_workers: int = 3,
+) -> list[DocumentSection]:
     """
-    Parse TOC using tiered approach.
-
-    Tier 1: Regex parsing of markdown headings (free, instant)
-    Tier 2: LLM fallback if no headings found (cheap, ~2 sec)
-    Tier 3: Single section fallback (entire document as one section)
-
-    Args:
-        markdown_text: Markdown content
-        use_llm_fallback: Whether to try LLM if regex fails
-        llm_model: Model for LLM fallback
-
-    Returns:
-        List of Section objects (always at least one section)
+    LLM-based segmentation with chunking and validation.
     """
-    # Tier 1: Try regex
-    sections = parse_toc_regex(markdown_text)
-    if sections:
+    # Add line markers
+    marked_text = add_line_markers(markdown_text, interval=50)
+    lines = markdown_text.split('\n')
+    marked_lines = marked_text.split('\n')
+    total_lines = len(lines)
+
+    # For small documents, process in one chunk
+    if total_lines <= chunk_size:
+        print(f"  Processing as single chunk ({total_lines} lines)")
+        sections = segment_chunk_llm(marked_text, 0, total_lines - 1, model)
+        sections = validate_titles_exist(sections, lines)
+        sections = fix_section_boundaries(sections, total_lines)
         return sections
 
-    # Tier 2: Try LLM fallback
-    if use_llm_fallback:
-        sections = parse_toc_llm(markdown_text, model=llm_model)
-        if sections:
-            return sections
+    # Prepare chunks for large documents
+    step = chunk_size - overlap
+    chunks = []
+    for i in range(0, total_lines, step):
+        chunk_end = min(i + chunk_size, total_lines)
+        chunk_text = '\n'.join(marked_lines[i:chunk_end])
+        chunks.append((chunk_text, i, chunk_end - 1))
 
-    # Tier 3: Single section fallback
-    return [Section(
+    print(f"  Processing {len(chunks)} chunks (size={chunk_size}, overlap={overlap})")
+
+    # Process chunks (parallel or sequential based on count)
+    all_sections = []
+
+    if len(chunks) <= 2 or max_workers <= 1:
+        # Sequential processing for small number of chunks
+        for idx, (chunk_text, start, end) in enumerate(chunks):
+            print(f"  Chunk {idx+1}/{len(chunks)}: lines {start}-{end}")
+            chunk_sections = segment_chunk_llm(chunk_text, start, end, model)
+            all_sections.extend(chunk_sections)
+    else:
+        # Parallel processing
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(segment_chunk_llm, chunk[0], chunk[1], chunk[2], model): idx
+                for idx, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    chunk_sections = future.result()
+                    all_sections.extend(chunk_sections)
+                    print(f"  Chunk {idx+1}/{len(chunks)} completed: {len(chunk_sections)} sections")
+                except Exception as e:
+                    print(f"  Chunk {idx+1} failed: {e}")
+
+    # Post-processing
+    print(f"  Deduplicating {len(all_sections)} raw sections...")
+    all_sections = deduplicate_sections(all_sections)
+    print(f"  After dedup: {len(all_sections)} sections")
+
+    # Validate titles exist
+    all_sections = validate_titles_exist(all_sections, lines)
+
+    # Fix boundaries
+    all_sections = fix_section_boundaries(all_sections, total_lines)
+
+    # Validate coverage
+    gaps = validate_coverage(all_sections, total_lines)
+    if gaps:
+        print(f"  [WARNING] Coverage gaps: {gaps}")
+
+    return all_sections
+
+
+# =============================================================================
+# Main Segmentation Function
+# =============================================================================
+
+def segment_document(
+    markdown_text: str,
+    model: str = SUB_MODEL,
+) -> list[DocumentSection]:
+    """
+    LLM-based document segmentation with validation.
+
+    Uses line markers for accurate references and validates
+    that detected sections actually exist in the document.
+    """
+    lines = markdown_text.split('\n')
+    total_lines = len(lines)
+
+    print(f"Segmenting document ({total_lines} lines, {len(markdown_text):,} chars)")
+
+    # LLM-based detection with validation
+    print("  Using LLM-based detection with line markers...")
+    sections = segment_document_llm(markdown_text, model)
+
+    if sections and len(sections) >= 1:
+        print(f"  SUCCESS: Found {len(sections)} sections")
+        return sections
+
+    # Fallback - single section
+    print("  FALLBACK: Creating single section for entire document")
+    return [DocumentSection(
         title="Document",
-        level=1,
-        parent=None,
-        start_char=0,
-        end_char=len(markdown_text),
+        description="Full document content",
+        line_range=LineRange(start=0, end=total_lines - 1)
     )]
 
 
 # =============================================================================
-# Contextual Summary Generation (Anthropic's Contextual Retrieval)
+# Summary Generation
 # =============================================================================
 
-def generate_section_context(
-    section: Section,
-    markdown_text: str,
+def generate_summary(
+    title: str,
+    content: str,
+    document_context: str,
     model: str = SUB_MODEL,
 ) -> str:
-    """
-    Generate contextual summary for a section using Anthropic's approach.
+    """Generate contextual summary for a section."""
+    if len(content) > MAX_SECTION_CHARS_FOR_SUMMARY:
+        content = content[:MAX_SECTION_CHARS_FOR_SUMMARY] + "\n...[truncated]"
 
-    Uses the full document context + specific chunk to generate a summary
-    that situates the chunk within the broader document.
-
-    Args:
-        section: Section to summarize
-        markdown_text: Full markdown document
-        model: LLM model for summarization
-
-    Returns:
-        Contextual summary string
-    """
-    # Get section content
-    section_content = markdown_text[section.start_char:section.end_char]
-
-    # Truncate if too long
-    if len(section_content) > MAX_SECTION_CHARS_FOR_SUMMARY:
-        section_content = section_content[:MAX_SECTION_CHARS_FOR_SUMMARY] + "\n...[truncated]"
-
-    # Get document context (truncated if needed)
-    doc_context = markdown_text[:MAX_DOC_CHARS_FOR_CONTEXT]
-    if len(markdown_text) > MAX_DOC_CHARS_FOR_CONTEXT:
-        doc_context += "\n...[document truncated]"
-
-    # Anthropic's Contextual Retrieval prompt
     prompt = f"""<document>
-{doc_context}
+{document_context[:5000]}
 </document>
 
-Here is the chunk we want to situate within the whole document:
-<chunk>
-{section_content}
-</chunk>
+<section title="{title}">
+{content}
+</section>
 
-Please give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk. Answer only with the succinct context and nothing else."""
+Write a 1-2 sentence summary of this section that captures its key content. Be specific and factual.
+
+Summary:"""
 
     try:
-        response = litellm.completion(
+        client = _get_openrouter_client()
+        model = _strip_openrouter_prefix(model)
+        response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
+            max_tokens=150,
             temperature=0,
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Summary generation failed for '{section.title}': {e}")
-        return f"Section: {section.title}"
-
-
-def extract_keywords(
-    section: Section,
-    markdown_text: str,
-    model: str = SUB_MODEL,
-) -> list[str]:
-    """
-    Extract keywords from a section for search indexing.
-
-    Args:
-        section: Section to extract keywords from
-        markdown_text: Full markdown document
-        model: LLM model for extraction
-
-    Returns:
-        List of keywords
-    """
-    section_content = markdown_text[section.start_char:section.end_char]
-
-    # Truncate if too long
-    if len(section_content) > MAX_SECTION_CHARS_FOR_SUMMARY:
-        section_content = section_content[:MAX_SECTION_CHARS_FOR_SUMMARY]
-
-    prompt = f"""Extract 3-7 important keywords or key phrases from this section.
-Return ONLY a JSON array of strings, nothing else.
-
-Section Title: {section.title}
-
-Content:
-{section_content}
-
-Keywords (JSON array):"""
-
-    try:
-        response = litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=100,
-            temperature=0,
-        )
-        content = response.choices[0].message.content.strip()
-
-        # Parse JSON
-        if "```" in content:
-            match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
-            if match:
-                content = match.group(1)
-
-        keywords = json.loads(content)
-        if isinstance(keywords, list):
-            return [str(k) for k in keywords[:7]]
-        return []
-    except Exception as e:
-        print(f"Keyword extraction failed for '{section.title}': {e}")
-        return []
-
-
-def generate_all_summaries(
-    sections: list[Section],
-    markdown_text: str,
-    model: str = SUB_MODEL,
-    include_keywords: bool = True,
-) -> tuple[dict[str, str], dict[str, list[str]]]:
-    """
-    Generate contextual summaries for all sections.
-
-    Args:
-        sections: List of sections to summarize
-        markdown_text: Full markdown document
-        model: LLM model for summarization
-        include_keywords: Whether to also extract keywords
-
-    Returns:
-        Tuple of (summaries dict, keywords dict)
-    """
-    summaries = {}
-    keywords = {}
-
-    for section in sections:
-        print(f"  Summarizing: {section.title}")
-
-        # Generate contextual summary
-        summaries[section.title] = generate_section_context(
-            section, markdown_text, model
-        )
-
-        # Extract keywords if requested
-        if include_keywords:
-            keywords[section.title] = extract_keywords(
-                section, markdown_text, model
-            )
-
-    return summaries, keywords
+        print(f"  [ERROR] Summary failed for '{title}': {e}")
+        return f"Section about {title}"
 
 
 # =============================================================================
-# Full Indexer Pipeline
+# Main Index Builder
 # =============================================================================
 
 def build_index(
     source_path: str,
     output_dir: Optional[str] = None,
+    model: str = SUB_MODEL,
     generate_summaries: bool = True,
-    use_llm_toc_fallback: bool = True,
-    toc_model: str = TOC_MODEL,
-    summary_model: str = SUB_MODEL,
-) -> SingleDocIndex:
+) -> StructuredDocument:
     """
-    Build complete index for a document.
+    Build complete structured index for a document.
 
-    Full pipeline:
-    1. Convert document to markdown
-    2. Parse TOC (regex -> LLM -> single section)
-    3. Generate contextual summaries (optional)
-    4. Extract keywords (optional)
-
-    Args:
-        source_path: Path to source document (PDF, DOCX, etc.)
-        output_dir: Directory for output files (default: same as source)
-        generate_summaries: Whether to generate summaries via LLM
-        use_llm_toc_fallback: Whether to use LLM if regex TOC fails
-        toc_model: Model for TOC fallback
-        summary_model: Model for summaries and keywords
-
-    Returns:
-        SingleDocIndex with all metadata
+    Uses tiered segmentation: regex -> LLM -> fallback
     """
     from .converter import DocumentConverter
 
     source = Path(source_path)
     if not source.exists():
-        raise FileNotFoundError(f"Source document not found: {source_path}")
+        raise FileNotFoundError(f"Document not found: {source_path}")
 
     # Set output directory
     if output_dir is None:
-        output_dir = source.parent
+        out_dir = source.parent
     else:
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Convert to markdown
-    print(f"Converting: {source.name}")
+    print(f"\n{'='*60}")
+    print(f"Building index for: {source.name}")
+    print(f"{'='*60}")
+
+    print(f"\nStep 1: Converting to markdown...")
     converter = DocumentConverter()
-    markdown_path = str(output_dir / f"{source.stem}.md")
-    markdown_text, markdown_path = converter.convert(source_path, markdown_path)
-    print(f"  -> {markdown_path} ({len(markdown_text):,} chars)")
+    markdown_path = str(out_dir / f"{source.stem}.md")
+    markdown_text, markdown_path = converter.convert(str(source_path), markdown_path)
 
-    # Step 2: Parse TOC
-    print("Parsing TOC...")
-    sections = parse_toc(
-        markdown_text,
-        use_llm_fallback=use_llm_toc_fallback,
-        llm_model=toc_model,
-    )
-    print(f"  Found {len(sections)} sections")
+    lines = markdown_text.split('\n')
+    print(f"  Result: {len(lines)} lines, {len(markdown_text):,} chars")
 
-    # Build sections dict
-    sections_dict = {s.title: s for s in sections}
+    # Step 2: Segment document (tiered approach)
+    print(f"\nStep 2: Segmenting document...")
+    doc_sections = segment_document(markdown_text, model=model)
+    print(f"  Result: {len(doc_sections)} sections found")
 
-    # Step 3: Generate summaries (optional)
-    summaries = {}
-    keywords = {}
+    # Step 3: Build sections with content and summaries
+    print(f"\nStep 3: Building section content and summaries...")
+    sections = []
 
-    if generate_summaries and len(sections) > 0:
-        print("Generating contextual summaries...")
-        summaries, keywords = generate_all_summaries(
-            sections,
-            markdown_text,
-            model=summary_model,
-            include_keywords=True,
-        )
-        print(f"  Generated {len(summaries)} summaries")
+    for idx, sec_data in enumerate(doc_sections):
+        title = sec_data.title
+        start_idx = max(0, sec_data.line_range.start)
+        end_idx = min(len(lines) - 1, sec_data.line_range.end)
 
-    # Build index
-    index = SingleDocIndex(
+        # Extract content
+        content = '\n'.join(lines[start_idx:end_idx + 1])
+
+        # Generate summary if requested
+        summary = sec_data.description or ""
+        if generate_summaries and len(content) > 100:
+            print(f"  [{idx+1}/{len(doc_sections)}] Summarizing: {title[:50]}...")
+            summary = generate_summary(
+                title=title,
+                content=content,
+                document_context=markdown_text[:5000],
+                model=model,
+            )
+
+        sections.append(Section(
+            title=title,
+            start_index=start_idx,
+            end_index=end_idx,
+            summary=summary,
+            content=content,
+        ))
+
+    # Build final document
+    doc = StructuredDocument(
         source_path=str(source_path),
         markdown_path=markdown_path,
+        total_lines=len(lines),
         total_chars=len(markdown_text),
-        sections=sections_dict,
-        summaries=summaries,
-        keywords=keywords,
+        sections=sections,
     )
 
-    return index
+    print(f"\n{'='*60}")
+    print(f"Index complete: {len(sections)} sections")
+    for i, s in enumerate(sections):
+        print(f"  {i+1}. [{s.start_index}-{s.end_index}] {s.title[:60]}")
+    print(f"{'='*60}\n")
+
+    return doc
 
 
 def build_and_save_index(
     source_path: str,
     output_dir: Optional[str] = None,
     **kwargs,
-) -> tuple[SingleDocIndex, str]:
-    """
-    Build index and save to JSON file.
+) -> tuple[StructuredDocument, str]:
+    """Build and save index to JSON file."""
+    doc = build_index(source_path, output_dir, **kwargs)
 
-    Args:
-        source_path: Path to source document
-        output_dir: Directory for output files
-        **kwargs: Additional arguments for build_index
-
-    Returns:
-        Tuple of (index, index_path)
-    """
-    index = build_index(source_path, output_dir, **kwargs)
-
-    # Save index
     source = Path(source_path)
     if output_dir is None:
-        output_dir = source.parent
+        out_dir = source.parent
     else:
-        output_dir = Path(output_dir)
+        out_dir = Path(output_dir)
 
-    index_path = str(output_dir / f"{source.stem}.index.json")
-    index.save(index_path)
+    index_path = str(out_dir / f"{source.stem}.index.json")
+    doc.save(index_path)
     print(f"Index saved: {index_path}")
 
-    return index, index_path
+    return doc, index_path
+
+
+def build_index_from_text(
+    text: str,
+    source_name: str = "raw_text",
+    model: str = SUB_MODEL,
+    generate_summaries: bool = True,
+) -> StructuredDocument:
+    """
+    Build complete structured index from raw text string.
+
+    Skips file conversion step - useful for benchmarks or in-memory documents.
+
+    Args:
+        text: Raw text content (markdown/plain text)
+        source_name: Name to identify this document
+        model: Model for segmentation/summaries
+        generate_summaries: Whether to generate contextual summaries
+
+    Returns:
+        StructuredDocument with sections and summaries
+    """
+    lines = text.split('\n')
+    total_lines = len(lines)
+
+    print(f"\n{'='*60}")
+    print(f"Building index from text: {source_name}")
+    print(f"{'='*60}")
+    print(f"  Size: {total_lines} lines, {len(text):,} chars")
+
+    # Step 1: Segment document
+    print(f"\nStep 1: Segmenting document...")
+    doc_sections = segment_document(text, model=model)
+    print(f"  Result: {len(doc_sections)} sections found")
+
+    # Step 2: Build sections with content and summaries
+    print(f"\nStep 2: Building section content and summaries...")
+    sections = []
+
+    for idx, sec_data in enumerate(doc_sections):
+        title = sec_data.title
+        start_idx = max(0, sec_data.line_range.start)
+        end_idx = min(len(lines) - 1, sec_data.line_range.end)
+
+        # Extract content
+        content = '\n'.join(lines[start_idx:end_idx + 1])
+
+        # Generate summary if requested
+        summary = sec_data.description or ""
+        if generate_summaries and len(content) > 100:
+            print(f"  [{idx+1}/{len(doc_sections)}] Summarizing: {title[:50]}...")
+            summary = generate_summary(
+                title=title,
+                content=content,
+                document_context=text[:5000],
+                model=model,
+            )
+
+        sections.append(Section(
+            title=title,
+            start_index=start_idx,
+            end_index=end_idx,
+            summary=summary,
+            content=content,
+        ))
+
+    # Build final document
+    doc = StructuredDocument(
+        source_path=source_name,
+        markdown_path=source_name,  # No markdown file for raw text
+        total_lines=total_lines,
+        total_chars=len(text),
+        sections=sections,
+    )
+
+    print(f"\n{'='*60}")
+    print(f"Index complete: {len(sections)} sections")
+    for i, s in enumerate(sections):
+        print(f"  {i+1}. [{s.start_index}-{s.end_index}] {s.title[:60]}")
+    print(f"{'='*60}\n")
+
+    return doc
+
+
+# Backward compatibility alias
+SingleDocIndex = StructuredDocument
