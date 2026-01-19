@@ -131,7 +131,7 @@ class RLMEngine:
 
         # Build TOC
         toc_text = "\n".join([
-            f"[{s['page_range']['start']}-{s['page_range']['end']}] {s['heading']}"
+            f"[{s.page_range.start}-{s.page_range.end}] {s.heading}"
             for s in segments
         ])
 
@@ -239,7 +239,7 @@ class RLMEngine:
         segments = segment_document(text, lines_per_page=50, chunk_size=10, max_workers=3)
 
         toc_text = "\n".join([
-            f"[{s['page_range']['start']}-{s['page_range']['end']}] {s['heading']}"
+            f"[{s.page_range.start}-{s.page_range.end}] {s.heading}"
             for s in segments
         ])
 
@@ -272,7 +272,8 @@ class RLMEngine:
         # Extract answer from result
         data = result.get("data", [])
         answer = data[0].get("answer", "") if data else ""
-        confidence = result.get("confidence_history", [{}])[-1].get("confidence", 0.0)
+        conf_history = result.get("confidence_history", [])
+        confidence = conf_history[-1].get("confidence", 0.0) if conf_history else 0.0
 
         return QueryResult(
             answer=answer,

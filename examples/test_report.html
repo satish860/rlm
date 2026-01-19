@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RLM Extraction Report</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-light: #dbeafe;
+            --success: #16a34a;
+            --warning: #ca8a04;
+            --danger: #dc2626;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-600: #4b5563;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: var(--gray-800);
+            background: var(--gray-50);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            background: white;
+            border-bottom: 1px solid var(--gray-200);
+            padding: 1.5rem 2rem;
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            color: var(--gray-900);
+        }
+
+        header .meta {
+            font-size: 0.875rem;
+            color: var(--gray-600);
+            margin-top: 0.5rem;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 1.25rem;
+            border: 1px solid var(--gray-200);
+        }
+
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .stat-card .label {
+            font-size: 0.875rem;
+            color: var(--gray-600);
+        }
+
+        .confidence-bar {
+            height: 8px;
+            background: var(--gray-200);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: var(--success);
+            transition: width 0.3s;
+        }
+
+        .confidence-fill.medium {
+            background: var(--warning);
+        }
+
+        .confidence-fill.low {
+            background: var(--danger);
+        }
+
+        .section {
+            background: white;
+            border-radius: 8px;
+            border: 1px solid var(--gray-200);
+            margin-bottom: 1.5rem;
+        }
+
+        .section-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--gray-200);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .section-header:hover {
+            background: var(--gray-50);
+        }
+
+        .section-header h2 {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+
+        .section-header .toggle {
+            color: var(--gray-600);
+            transition: transform 0.2s;
+        }
+
+        .section-header.collapsed .toggle {
+            transform: rotate(-90deg);
+        }
+
+        .section-content {
+            padding: 1.5rem;
+        }
+
+        .section-content.collapsed {
+            display: none;
+        }
+
+        /* Data table */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        .data-table th,
+        .data-table td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--gray-200);
+        }
+
+        .data-table th {
+            background: var(--gray-50);
+            font-weight: 600;
+            color: var(--gray-600);
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+
+        .data-table tr:hover {
+            background: var(--gray-50);
+        }
+
+        .data-table .page-num {
+            color: var(--primary);
+            font-weight: 500;
+        }
+
+        /* Citations */
+        mark.citation {
+            background: var(--primary-light);
+            padding: 0.125rem 0.25rem;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+
+        mark.citation:hover {
+            background: #bfdbfe;
+        }
+
+        .citation-index {
+            list-style-position: inside;
+            padding: 0;
+        }
+
+        .citation-index li {
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--gray-100);
+        }
+
+        .citation-snippet {
+            font-style: italic;
+            color: var(--gray-600);
+        }
+
+        .citation-page {
+            font-size: 0.875rem;
+            color: var(--primary);
+            font-weight: 500;
+        }
+
+        .citation-note {
+            color: var(--gray-600);
+            font-size: 0.875rem;
+        }
+
+        /* Document viewer */
+        .document-content {
+            max-height: 500px;
+            overflow-y: auto;
+            background: var(--gray-50);
+            padding: 1rem;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.8125rem;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+
+        /* Thinking log */
+        .thinking-entry {
+            padding: 0.75rem 1rem;
+            background: var(--gray-50);
+            border-radius: 4px;
+            margin-bottom: 0.5rem;
+            border-left: 3px solid var(--primary);
+        }
+
+        .thinking-entry .timestamp {
+            font-size: 0.75rem;
+            color: var(--gray-600);
+        }
+
+        .thinking-entry .thought {
+            margin-top: 0.25rem;
+        }
+
+        /* Verification */
+        .verification-item {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem 0;
+        }
+
+        .verification-item .icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 0.75rem;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            color: white;
+        }
+
+        .verification-item .icon.pass {
+            background: var(--success);
+        }
+
+        .verification-item .icon.fail {
+            background: var(--danger);
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--gray-600);
+            font-size: 0.875rem;
+        }
+
+        footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        /* Print styles */
+        @media print {
+            body {
+                background: white;
+            }
+
+            .container {
+                max-width: none;
+                padding: 0;
+            }
+
+            .section {
+                break-inside: avoid;
+            }
+
+            .section-content.collapsed {
+                display: block !important;
+            }
+
+            .toggle {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>RLM Extraction Report</h1>
+        <div class="meta">
+            <span>Document: C:\code\rlm\examples\sample_data.txt</span>
+            <span> | </span>
+            <span>Generated: 2026-01-19 12:57:18</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Stats -->
+        <div class="stats">
+            <div class="stat-card">
+                <div class="value">6</div>
+                <div class="label">Records Extracted</div>
+            </div>
+            <div class="stat-card">
+                <div class="value">6</div>
+                <div class="label">Citations</div>
+            </div>
+            <div class="stat-card">
+                <div class="value">9</div>
+                <div class="label">Iterations</div>
+            </div>
+            <div class="stat-card">
+                <div class="value">100%</div>
+                <div class="label">Confidence</div>
+                <div class="confidence-bar">
+                    <div class="confidence-fill " style="width: 100%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Extracted Data -->
+        <div class="section">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>Extracted Data (6 records)</h2>
+                <span class="toggle">&#9660;</span>
+            </div>
+            <div class="section-content">
+                <table class="data-table">
+<thead><tr>
+<th>company</th>
+<th>email</th>
+<th>phone</th>
+<th>page</th>
+<th>contact_name</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>Acme Corporation</td>
+<td>john.smith@acme.com</td>
+<td>555-0101</td>
+<td class="page-num">1</td>
+<td>John Smith</td>
+</tr>
+<tr>
+<td>TechStart Inc.</td>
+<td>sarah.j@techstart.io</td>
+<td>555-0102</td>
+<td class="page-num">1</td>
+<td>Sarah Johnson</td>
+</tr>
+<tr>
+<td>Global Industries Ltd.</td>
+<td>mchen@globalind.com</td>
+<td>555-0103</td>
+<td class="page-num">1</td>
+<td>Michael Chen</td>
+</tr>
+<tr>
+<td>DataFlow Systems</td>
+<td>emily.davis@dataflow.net</td>
+<td>555-0104</td>
+<td class="page-num">1</td>
+<td>Emily Davis</td>
+</tr>
+<tr>
+<td>CloudNine Solutions</td>
+<td>rwilson@cloudnine.co</td>
+<td>555-0105</td>
+<td class="page-num">1</td>
+<td>Robert Wilson</td>
+</tr>
+<tr>
+<td>GreenTech Innovations</td>
+<td>lisa@greentech.org</td>
+<td>555-0106</td>
+<td class="page-num">1</td>
+<td>Lisa Anderson</td>
+</tr>
+</tbody>
+</table>
+            </div>
+        </div>
+
+        <!-- Citations -->
+        <div class="section">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>Citations (6)</h2>
+                <span class="toggle">&#9660;</span>
+            </div>
+            <div class="section-content">
+                <ol class="citation-index">
+<li id="citation-0">
+  <span class="citation-snippet">"Acme Corporation
+Contact: John Smith
+Phone: 555-0101
+Email: john.smith@acme.com"</span>
+  <span class="citation-page">(Page 1)</span>
+  <span class="citation-note"> - First contact entry</span>
+</li>
+<li id="citation-1">
+  <span class="citation-snippet">"TechStart Inc.
+Contact: Sarah Johnson
+Phone: 555-0102
+Email: sarah.j@techstart.io"</span>
+  <span class="citation-page">(Page 1)</span>
+  <span class="citation-note"> - Second contact entry</span>
+</li>
+<li id="citation-2">
+  <span class="citation-snippet">"Global Industries Ltd.
+Contact: Michael Chen
+Phone: 555-0103
+Email: mchen@globalind.com"</span>
+  <span class="citation-page">(Page 1)</span>
+  <span class="citation-note"> - Third contact entry</span>
+</li>
+<li id="citation-3">
+  <span class="citation-snippet">"DataFlow Systems
+Contact: Emily Davis
+Phone: 555-0104
+Email: emily.davis@dataflow.net"</span>
+  <span class="citation-page">(Page 1)</span>
+  <span class="citation-note"> - Fourth contact entry</span>
+</li>
+<li id="citation-4">
+  <span class="citation-snippet">"CloudNine Solutions
+Contact: Robert Wilson
+Phone: 555-0105
+Email: rwilson@cloudnine.co"</span>
+  <span class="citation-page">(Page 1)</span>
+  <span class="citation-note"> - Fifth contact entry</span>
+</li>
+<li id="citation-5">
+  <span class="citation-snippet">"GreenTech Innovations
+Contact: Lisa Anderson
+Phone: 555-0106
+Email: lisa@greentech.org"</span>
+  <span class="citation-page">(Page 1)</span>
+  <span class="citation-note"> - Sixth contact entry</span>
+</li>
+</ol>
+            </div>
+        </div>
+
+        <!-- Document with Highlights -->
+        
+
+        <!-- Thinking Log -->
+        
+        <div class="section">
+            <div class="section-header collapsed" onclick="toggleSection(this)">
+                <h2>Reasoning Trace (1 thoughts)</h2>
+                <span class="toggle">&#9660;</span>
+            </div>
+            <div class="section-content collapsed">
+                <div class="thinking-entry">
+            <div class="timestamp">2026-01-19 12:56:12</div>
+            <div class="thought">
+Document Analysis:
+- This is a COMPANY DIRECTORY with contact information
+- Page 1 contains: 6 company contacts (Acme, TechStart, Global Industries on &quot;Page 1&quot;, 
+  DataFlow, CloudNine, GreenTech on &quot;Page 2&quot; - but all on physical page 1)
+- Page 2 contains: Financial Summary data (quarterly revenue, totals, growth)
+
+Two distinct data types:
+1. Company Contacts: company name, contact person, phone, email, address
+2. Financial Metrics: quarterly revenues, totals, margins
+
+Schema needed:
+- SimpleContact model as specified: company, contact_name, phone, email, page
+- Note: The document has internal page markers (&quot;Page 1&quot;, &quot;Page 2&quot;, &quot;Page 3&quot;) 
+  but these are within the 2 physical pages
+
+Strategy:
+1. Extract company contacts from both physical pages using structured extraction
+2. Record verbatim citations for verification
+3. Map to physical page numbers (PG:1 and PG:2)
+</div>
+        </div>
+            </div>
+        </div>
+        {{/if}}
+
+        <!-- Verification -->
+        <div class="section">
+            <div class="section-header" onclick="toggleSection(this)">
+                <h2>Verification</h2>
+                <span class="toggle">&#9660;</span>
+            </div>
+            <div class="section-content">
+                <div class="verification-item">
+        <div class="icon pass">&#10003;</div>
+        <span>Verification: Passed</span>
+    </div>
+<div class="verification-item">
+        <div class="icon pass">&#10003;</div>
+        <span>Total Records: 6</span>
+    </div>
+<div class="verification-item">
+            <div class="icon pass">&#10003;</div>
+            <span>Pages Processed: 2</span>
+        </div>
+<div class="verification-item">
+            <div class="icon pass">&#10003;</div>
+            <span>Categories: company_contacts: 6, pages_with_contacts: 1, pages_with_financial_data: 1</span>
+        </div>
+<div class="verification-item">
+            <div class="icon pass">&#10003;</div>
+            <span>Notes: Successfully extracted all 6 company contacts from the Company Directory section on page 1. Each record includes complete information with verbatim citations recorded. Page 2 contains financial summary data (not contact information). All contacts verified against source text with 100% confidence. Verbatim citations include: &#x27;Acme Corporation\nContact: John Smith\nPhone: 555-0101\nEmail: john.smith@acme.com&#x27; and similar for all other entries.</span>
+        </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        Generated by <a href="https://github.com/satish860/rlm">RLM</a> - Recursive Language Model Library
+    </footer>
+
+    <script>
+        function toggleSection(header) {
+            header.classList.toggle('collapsed');
+            const content = header.nextElementSibling;
+            content.classList.toggle('collapsed');
+        }
+    </script>
+</body>
+</html>

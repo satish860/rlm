@@ -1,0 +1,61 @@
+COMPANY DIRECTORY
+=================
+
+Page 1
+------
+
+Acme Corporation
+Contact: John Smith
+Phone: 555-0101
+Email: john.smith@acme.com
+Address: 123 Main Street, New York, NY 10001
+
+TechStart Inc.
+Contact: Sarah Johnson
+Phone: 555-0102
+Email: sarah.j@techstart.io
+Address: 456 Innovation Blvd, San Francisco, CA 94102
+
+Global Industries Ltd.
+Contact: Michael Chen
+Phone: 555-0103
+Email: mchen@globalind.com
+Address: 789 Commerce Way, Chicago, IL 60601
+
+Page 2
+------
+
+DataFlow Systems
+Contact: Emily Davis
+Phone: 555-0104
+Email: emily.davis@dataflow.net
+Address: 321 Data Drive, Austin, TX 78701
+
+CloudNine Solutions
+Contact: Robert Wilson
+Phone: 555-0105
+Email: rwilson@cloudnine.co
+Address: 654 Cloud Street, Seattle, WA 98101
+
+GreenTech Innovations
+Contact: Lisa Anderson
+Phone: 555-0106
+Email: lisa@greentech.org
+Address: 987 Eco Lane, Portland, OR 97201
+
+Page 3
+------
+
+FINANCIAL SUMMARY
+-----------------
+
+Q1 2024 Revenue: $1,250,000
+Q2 2024 Revenue: $1,450,000
+Q3 2024 Revenue: $1,680,000
+Q4 2024 Revenue: $1,920,000
+
+Total 2024 Revenue: $6,300,000
+Year-over-Year Growth: 23%
+
+Net Income: $945,000
+Operating Margin: 15%
