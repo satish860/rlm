@@ -1,8 +1,0 @@
-Approved: 2026-01-15
-
-Design decisions:
-- Three-stage pipeline (Schema Gen -> Query -> JSON Convert)
-- Instructor for guaranteed JSON output
-- Section-based splitting for large extractions
-- on_error parameter for user control
-- New files: models.py, schema_gen.py, json_convert.py, errors.py
