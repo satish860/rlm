@@ -12,7 +12,6 @@ The engine orchestrates:
 import json
 from pathlib import Path
 from typing import Dict, List, Any, Type, Optional, Callable
-from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -29,6 +28,8 @@ from rlm.extraction.structured import (
 )
 from rlm.providers import get_provider
 from rlm.providers.base import BaseProvider
+from rlm.reasoning.tracer import ReasoningTracer
+from rlm.reasoning.session import SessionManager
 
 
 class RLMEngine:
@@ -357,103 +358,37 @@ class RLMEngine:
         self,
         repl: REPLEnvironment,
         progress_callback: Callable[[str], None]
-    ):
-        """Add reasoning functions to REPL namespace."""
+    ) -> ReasoningTracer:
+        """
+        Add reasoning functions to REPL namespace.
+
+        Uses ReasoningTracer and SessionManager for clean separation.
+
+        Returns:
+            ReasoningTracer instance for accessing collected data
+        """
         namespace = repl.namespace
-        sessions_dir = self.sessions_dir
+        total_pages = namespace.get("total_pages", 1)
 
-        def think(reasoning: str) -> str:
-            """Structure reasoning before action."""
-            entry = {
-                "timestamp": datetime.now().isoformat(),
-                "thought": reasoning
-            }
-            namespace["thinking_log"].append(entry)
-            progress_callback(f"THINK: {reasoning[:80]}...")
-            return f"Thought recorded. Total thoughts: {len(namespace['thinking_log'])}"
+        # Create tracer and session manager
+        tracer = ReasoningTracer(
+            total_pages=total_pages,
+            progress_callback=progress_callback
+        )
+        session_manager = SessionManager(sessions_dir=str(self.sessions_dir))
 
-        def cite(snippet: str, page: int, note: str = "") -> str:
-            """Record evidence citation."""
-            entry = {
-                "snippet": snippet,
-                "page": page,
-                "note": note
-            }
-            namespace["citations"].append(entry)
-            return f"Citation recorded. Total citations: {len(namespace['citations'])}"
+        # Link tracer state to namespace for compatibility
+        namespace["thinking_log"] = tracer.thinking_log
+        namespace["citations"] = tracer.citations
+        namespace["confidence_history"] = tracer.confidence_history
 
-        def evaluate_progress(
-            records_extracted: int = None,
-            pages_covered: list = None,
-            issues: str = "",
-            notes: str = ""
-        ) -> float:
-            """Self-assess extraction progress."""
-            records_count = records_extracted or len(namespace.get("records", []))
-            total_pages = namespace.get("total_pages", 1)
-            pages_done = pages_covered or []
+        # Add tracer functions
+        repl.update(tracer.get_functions())
 
-            coverage = len(pages_done) / total_pages if total_pages > 0 else 0
-            has_records = 1.0 if records_count > 0 else 0.0
-            has_issues = 0.8 if issues else 1.0
+        # Add session functions (linked to namespace)
+        repl.update(session_manager.get_functions(namespace))
 
-            confidence = (coverage * 0.5 + has_records * 0.3 + has_issues * 0.2)
-            confidence = min(1.0, max(0.0, confidence))
-
-            entry = {
-                "records": records_count,
-                "pages_covered": len(pages_done),
-                "total_pages": total_pages,
-                "coverage": coverage,
-                "issues": issues,
-                "notes": notes,
-                "confidence": confidence
-            }
-            namespace.setdefault("confidence_history", []).append(entry)
-
-            progress_callback(f"EVALUATE: confidence={confidence:.2f}, records={records_count}, coverage={coverage:.1%}")
-            return confidence
-
-        def save_session(name: str) -> str:
-            """Save session state."""
-            session_data = {
-                "records": namespace.get("records", []),
-                "citations": namespace.get("citations", []),
-                "thinking_log": namespace.get("thinking_log", []),
-                "confidence_history": namespace.get("confidence_history", []),
-                "extracted_data": namespace.get("extracted_data", {}),
-                "total_pages": namespace.get("total_pages", 0),
-            }
-            sessions_dir.mkdir(parents=True, exist_ok=True)
-            filepath = sessions_dir / f"{name}.json"
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(session_data, f, indent=2, ensure_ascii=False, default=str)
-            return f"Session saved to {filepath}"
-
-        def load_session(name: str) -> str:
-            """Load session state."""
-            filepath = sessions_dir / f"{name}.json"
-            if not filepath.exists():
-                return f"Session not found: {filepath}"
-
-            with open(filepath, "r", encoding="utf-8") as f:
-                session_data = json.load(f)
-
-            namespace["records"] = session_data.get("records", [])
-            namespace["citations"] = session_data.get("citations", [])
-            namespace["thinking_log"] = session_data.get("thinking_log", [])
-            namespace["confidence_history"] = session_data.get("confidence_history", [])
-            namespace["extracted_data"] = session_data.get("extracted_data", {})
-
-            return f"Session loaded: {len(namespace['records'])} records, {len(namespace['citations'])} citations"
-
-        repl.update({
-            "think": think,
-            "cite": cite,
-            "evaluate_progress": evaluate_progress,
-            "save_session": save_session,
-            "load_session": load_session,
-        })
+        return tracer
 
     def _run_loop(
         self,

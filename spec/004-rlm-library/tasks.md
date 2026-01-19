@@ -13,12 +13,12 @@
 | Phase 2: Document Handling | 5 tasks | Core | Complete |
 | Phase 3: Provider Abstraction | 5 tasks | Core | Complete |
 | Phase 4: Extraction Engine | 6 tasks | Core | Complete |
-| Phase 5: Reasoning & Session | 4 tasks | Core | Not Started |
+| Phase 5: Reasoning & Session | 4 tasks | Core | Complete |
 | Phase 6: Visualization | 4 tasks | Feature | Not Started |
 | Phase 7: CLI | 4 tasks | Feature | Not Started |
 | Phase 8: Demo Examples | 5 tasks | Polish | Not Started |
 | Phase 9: Testing | 5 tasks | QA | Not Started |
-| **Total** | **44 tasks** | | **50% Complete** |
+| **Total** | **44 tasks** | | **59% Complete** |
 
 ---
 
@@ -199,7 +199,7 @@
 
 ### 5.1 Reasoning Tracer
 
-- [ ] **T-023**: Create `rlm/reasoning/tracer.py`
+- [x] **T-023**: Create `rlm/reasoning/tracer.py`
   - Create `ReasoningTracer` class
   - Move `think()` from `evals/generic_extract.py`
   - Move `cite()` from `evals/generic_extract.py`
@@ -208,18 +208,18 @@
 
 ### 5.2 Session Management
 
-- [ ] **T-024**: Create `rlm/reasoning/session.py`
+- [x] **T-024**: Create `rlm/reasoning/session.py`
   - Create `SessionManager` class
   - Move `save_session()` from `evals/generic_extract.py`
   - Move `load_session()` from `evals/generic_extract.py`
   - Add session metadata (timestamp, document path, schema)
 
-- [ ] **T-025**: Integrate reasoning into RLMEngine
+- [x] **T-025**: Integrate reasoning into RLMEngine
   - Inject `ReasoningTracer` into REPL namespace
   - Collect reasoning data into `ExtractionResult`
   - Add `save_session()` and `load_session()` to engine
 
-- [ ] **T-026**: Add session CLI support
+- [x] **T-026**: Add session CLI support
   - `rlm sessions list` - list saved sessions
   - `rlm sessions resume <name>` - resume session
 
