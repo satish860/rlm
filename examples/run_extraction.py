@@ -30,11 +30,12 @@ def main():
     print("=" * 60)
 
     # Extract using built-in Contact schema
+    # Use higher iterations for large documents
     result = rlm.extract(
         str(pdf_path),
         schema=rlm.schemas.Contact,
         verbose=True,
-        max_iterations=30
+        max_iterations=50  # More iterations for 55-page document
     )
 
     # Show results
