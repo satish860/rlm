@@ -200,11 +200,18 @@ def visualize(
     return html_content
 
 
+def interactive():
+    """Launch interactive CLI session."""
+    from rlm.interactive import main as interactive_main
+    interactive_main()
+
+
 __all__ = [
     # Functions
     "extract",
     "query",
     "visualize",
+    "interactive",
     # Classes
     "RLMEngine",
     "RLMConfig",

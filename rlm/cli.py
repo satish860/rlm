@@ -2,11 +2,21 @@
 RLM Command Line Interface - Extract, query, and visualize documents.
 
 Usage:
-    rlm extract <document> --schema <name> --output <path>
-    rlm query <document> "<question>"
-    rlm visualize <result.json> --output <report.html>
+    # Interactive mode (default - for business users)
+    rlm                                     # Start interactive session
+    rlm --batch extract doc.pdf             # Non-interactive batch mode
+
+    # Business user (no schema needed)
+    rlm discover document.pdf               # Analyze and suggest fields
+    rlm discover "invoices/*.pdf"           # Analyze multiple files
+    rlm extract document.pdf --discover     # Auto-discover and extract
+    rlm extract "*.pdf" --merge -o out.csv  # Multi-file extraction
+
+    # Developer (with Pydantic schema)
+    rlm extract doc.pdf --schema contact -o result.json
+    rlm query doc.pdf "What was Q3 revenue?"
+    rlm visualize result.json -o report.html
     rlm sessions list
-    rlm sessions info <name>
 """
 
 import sys
@@ -15,9 +25,17 @@ import csv
 from pathlib import Path
 from typing import Optional
 
+# Load .env file before anything else
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not installed, skip
+
 import click
 
 import rlm
+import rlm.business as biz
 from rlm.core.types import ExtractionResult, Citation
 from rlm.reasoning.session import SessionManager
 
@@ -105,14 +123,25 @@ def write_output(data: list, output_path: str, format: str):
                 writer.writerow(flat)
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version=rlm.__version__, prog_name="rlm")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option("--batch", is_flag=True, help="Batch mode (non-interactive)")
 @click.pass_context
-def cli(ctx, verbose):
-    """RLM - Recursive Language Model for document extraction."""
+def cli(ctx, verbose, batch):
+    """RLM - Recursive Language Model for document extraction.
+
+    Run without arguments for interactive mode (recommended for business users).
+    Use subcommands (extract, query, etc.) for batch/scripted operations.
+    """
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
+    ctx.obj["batch"] = batch
+
+    # If no subcommand and not batch mode, launch interactive
+    if ctx.invoked_subcommand is None and not batch:
+        from rlm.interactive import main as interactive_main
+        interactive_main()
 
 
 @cli.command()
@@ -306,6 +335,57 @@ def visualize_cmd(ctx, result_file, output, open_browser):
         raise click.ClickException(f"Invalid JSON file: {e}")
     except Exception as e:
         raise click.ClickException(f"Visualization failed: {e}")
+
+
+@cli.command()
+@click.argument("document")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def discover(ctx, document, as_json):
+    """
+    Analyze document(s) and suggest extraction fields.
+
+    Examples:
+        rlm discover invoice.pdf
+        rlm discover "invoices/*.pdf" --json
+    """
+    verbose = ctx.obj.get("verbose", False)
+
+    click.echo(f"Analyzing: {document}")
+
+    try:
+        analysis = biz.discover(document, verbose=verbose)
+
+        if as_json:
+            import json as json_mod
+            output = {
+                "document_type": analysis.document_type,
+                "confidence": analysis.confidence,
+                "file_count": analysis.file_count,
+                "total_pages": analysis.total_pages,
+                "suggested_fields": [
+                    {
+                        "name": f.name,
+                        "type": f.field_type,
+                        "description": f.description,
+                        "examples": f.examples
+                    }
+                    for f in analysis.suggested_fields
+                ]
+            }
+            click.echo(json_mod.dumps(output, indent=2))
+        else:
+            click.echo("")
+            click.echo(f"Document Type: {analysis.document_type} ({analysis.confidence:.0%} confidence)")
+            click.echo(f"Files: {analysis.file_count}, Pages: {analysis.total_pages}")
+            click.echo("")
+            click.echo("Suggested Fields:")
+            for f in analysis.suggested_fields:
+                examples = ", ".join(str(ex) for ex in f.examples[:2]) if f.examples else ""
+                click.echo(f"  - {f.name} ({f.field_type}): {examples}")
+
+    except Exception as e:
+        raise click.ClickException(f"Discovery failed: {e}")
 
 
 @cli.group()
