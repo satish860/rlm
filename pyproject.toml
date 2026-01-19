@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rlm"
+version = "0.1.0"
+description = "Recursive Language Model - Intelligent document extraction with reasoning"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "V. Satish" }
+]
+keywords = [
+    "llm",
+    "document-extraction",
+    "pdf",
+    "pydantic",
+    "structured-output",
+    "rag",
+    "reasoning"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: General",
+]
+dependencies = [
+    "litellm>=1.0.0",
+    "instructor>=1.0.0",
+    "pydantic>=2.0.0",
+    "markitdown>=0.1.0",
+    "click>=8.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+rlm = "rlm.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/satish860/rlm"
+Repository = "https://github.com/satish860/rlm"
+Issues = "https://github.com/satish860/rlm/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["rlm"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/rlm",
+    "/examples",
+    "/README.md",
+    "/requirements.txt",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
