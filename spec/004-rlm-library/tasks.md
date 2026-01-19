@@ -10,7 +10,7 @@
 | Phase | Tasks | Estimated | Status |
 |-------|-------|-----------|--------|
 | Phase 1: Package Structure | 6 tasks | Foundation | Complete |
-| Phase 2: Document Handling | 5 tasks | Core | Not Started |
+| Phase 2: Document Handling | 5 tasks | Core | Complete |
 | Phase 3: Provider Abstraction | 5 tasks | Core | Not Started |
 | Phase 4: Extraction Engine | 6 tasks | Core | Not Started |
 | Phase 5: Reasoning & Session | 4 tasks | Core | Not Started |
@@ -18,7 +18,7 @@
 | Phase 7: CLI | 4 tasks | Feature | Not Started |
 | Phase 8: Demo Examples | 5 tasks | Polish | Not Started |
 | Phase 9: Testing | 5 tasks | QA | Not Started |
-| **Total** | **44 tasks** | | **14% Complete** |
+| **Total** | **44 tasks** | | **25% Complete** |
 
 ---
 
@@ -80,28 +80,28 @@
 
 ### 2.1 Document Readers
 
-- [ ] **T-007**: Create `rlm/document/formats/pdf.py`
+- [x] **T-007**: Create `rlm/document/formats/pdf.py`
   - Move `read_pdf_as_text()` from `evals/generic_extract.py`
   - Move `read_pdf_as_markdown()` from `evals/generic_extract.py`
   - Add `PDFReader` class with `read(path) -> str` method
   - Support both pymupdf and pdfplumber backends
 
-- [ ] **T-008**: Create `rlm/document/formats/markdown.py`
+- [x] **T-008**: Create `rlm/document/formats/markdown.py`
   - Create `MarkdownReader` class
   - Simple file read with encoding handling
 
-- [ ] **T-009**: Create `rlm/document/formats/text.py`
+- [x] **T-009**: Create `rlm/document/formats/text.py`
   - Create `TextReader` class
   - Handle various encodings (UTF-8, Latin-1 fallback)
 
-- [ ] **T-010**: Create `rlm/document/reader.py`
+- [x] **T-010**: Create `rlm/document/reader.py`
   - Create `read_document(path) -> str` factory function
   - Auto-detect format from file extension
   - Raise `DocumentError` for unsupported formats
 
 ### 2.2 Segmentation
 
-- [ ] **T-011**: Create `rlm/document/segmenter.py`
+- [x] **T-011**: Create `rlm/document/segmenter.py`
   - Move `split_into_pages()` from `segmenter.py`
   - Move `segment_document()` from `segmenter.py`
   - Move `process_chunk()` from `segmenter.py`
