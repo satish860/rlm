@@ -11,14 +11,14 @@
 |-------|-------|-----------|--------|
 | Phase 1: Package Structure | 6 tasks | Foundation | Complete |
 | Phase 2: Document Handling | 5 tasks | Core | Complete |
-| Phase 3: Provider Abstraction | 5 tasks | Core | Not Started |
-| Phase 4: Extraction Engine | 6 tasks | Core | Not Started |
+| Phase 3: Provider Abstraction | 5 tasks | Core | Complete |
+| Phase 4: Extraction Engine | 6 tasks | Core | Complete |
 | Phase 5: Reasoning & Session | 4 tasks | Core | Not Started |
 | Phase 6: Visualization | 4 tasks | Feature | Not Started |
 | Phase 7: CLI | 4 tasks | Feature | Not Started |
 | Phase 8: Demo Examples | 5 tasks | Polish | Not Started |
 | Phase 9: Testing | 5 tasks | QA | Not Started |
-| **Total** | **44 tasks** | | **25% Complete** |
+| **Total** | **44 tasks** | | **50% Complete** |
 
 ---
 
@@ -116,7 +116,7 @@
 
 ### 3.1 Base Provider
 
-- [ ] **T-012**: Create `rlm/providers/base.py`
+- [x] **T-012**: Create `rlm/providers/base.py`
   - Define `BaseProvider` ABC with:
     - `chat(messages, model, tools) -> dict`
     - `extract(prompt, response_model, model) -> BaseModel`
@@ -125,22 +125,22 @@
 
 ### 3.2 Provider Implementations
 
-- [ ] **T-013**: Create `rlm/providers/openrouter.py`
+- [x] **T-013**: Create `rlm/providers/openrouter.py`
   - Implement `OpenRouterProvider(BaseProvider)`
   - Use existing OpenRouter code from `evals/generic_extract.py`
   - Support both chat and instructor-based extraction
 
-- [ ] **T-014**: Create `rlm/providers/openai.py`
+- [x] **T-014**: Create `rlm/providers/openai.py`
   - Implement `OpenAIProvider(BaseProvider)`
   - Direct OpenAI API calls
   - Instructor integration for structured output
 
-- [ ] **T-015**: Create `rlm/providers/anthropic.py`
+- [x] **T-015**: Create `rlm/providers/anthropic.py`
   - Implement `AnthropicProvider(BaseProvider)`
   - Use anthropic SDK
   - Handle tool use format differences
 
-- [ ] **T-016**: Create `rlm/providers/factory.py`
+- [x] **T-016**: Create `rlm/providers/factory.py`
   - Create `get_provider(name: str) -> BaseProvider` factory
   - Auto-detect from environment variables if name not specified
   - Raise `ProviderError` for unknown providers
@@ -153,20 +153,20 @@
 
 ### 4.1 REPL Environment
 
-- [ ] **T-017**: Create `rlm/core/repl.py`
+- [x] **T-017**: Create `rlm/core/repl.py`
   - Create `REPLEnvironment` class
   - Manage namespace dictionary
   - Provide `execute(code) -> str` method with stdout capture
   - Handle exceptions with line number context
 
-- [ ] **T-018**: Create `rlm/core/tools.py`
+- [x] **T-018**: Create `rlm/core/tools.py`
   - Define TOOLS list (execute_code, final_answer, final_answer_file)
   - Move tool definitions from `evals/generic_extract.py`
   - Create helper functions: `get_section()`, `ask_about_section()`
 
 ### 4.2 Extraction Functions
 
-- [ ] **T-019**: Create `rlm/extraction/structured.py`
+- [x] **T-019**: Create `rlm/extraction/structured.py`
   - Move `llm_extract()` from `evals/generic_extract.py`
   - Move `llm_extract_parallel()` from `evals/generic_extract.py`
   - Update to use provider abstraction
@@ -174,19 +174,19 @@
 
 ### 4.3 Engine
 
-- [ ] **T-020**: Create `rlm/core/prompts.py`
+- [x] **T-020**: Create `rlm/core/prompts.py`
   - Move `build_system_prompt()` from `evals/generic_extract.py`
   - Templatize with configurable sections
   - Support custom tool descriptions
 
-- [ ] **T-021**: Create `rlm/core/engine.py`
+- [x] **T-021**: Create `rlm/core/engine.py`
   - Create `RLMEngine` class
   - Refactor `run_generic_extraction()` into class methods
   - Implement `extract(document, schema)` method
   - Implement `query(document, question)` method
   - Wire together: reader -> segmenter -> REPL -> provider
 
-- [ ] **T-022**: Implement public API in `rlm/__init__.py`
+- [x] **T-022**: Implement public API in `rlm/__init__.py`
   - Implement `extract()` function using RLMEngine
   - Implement `query()` function using RLMEngine
   - Use default config from environment
