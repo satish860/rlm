@@ -145,22 +145,59 @@ def query(
     )
 
 
-def visualize(result: ExtractionResult, output: str = None, open_browser: bool = False) -> str:
+def visualize(
+    result: ExtractionResult,
+    output: str = None,
+    document_text: str = None,
+    open_browser: bool = False
+) -> str:
     """
     Generate HTML visualization of extraction results.
 
     Args:
         result: ExtractionResult from extract()
         output: Output file path (if None, returns HTML string)
-        open_browser: Open result in browser
+        document_text: Optional document text for citation highlighting
+        open_browser: Open result in browser after generation
 
     Returns:
         HTML string if output is None, otherwise output path
 
-    Note:
-        This function will be implemented in Phase 6 (Visualization).
+    Example:
+        import rlm
+
+        result = rlm.extract("contacts.pdf", schema=Contact)
+
+        # Save to file
+        rlm.visualize(result, output="report.html")
+
+        # Get HTML string
+        html = rlm.visualize(result)
+
+        # Open in browser
+        rlm.visualize(result, output="report.html", open_browser=True)
     """
-    raise NotImplementedError("visualize() will be implemented in T-029")
+    from rlm.visualization.html import generate_html_report
+
+    html_content = generate_html_report(
+        result,
+        document_text=document_text,
+        include_document=document_text is not None
+    )
+
+    if output:
+        from pathlib import Path
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(html_content, encoding="utf-8")
+
+        if open_browser:
+            import webbrowser
+            webbrowser.open(f"file://{output_path.absolute()}")
+
+        return str(output_path)
+
+    return html_content
 
 
 __all__ = [

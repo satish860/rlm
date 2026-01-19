@@ -14,11 +14,11 @@
 | Phase 3: Provider Abstraction | 5 tasks | Core | Complete |
 | Phase 4: Extraction Engine | 6 tasks | Core | Complete |
 | Phase 5: Reasoning & Session | 4 tasks | Core | Complete |
-| Phase 6: Visualization | 4 tasks | Feature | Not Started |
+| Phase 6: Visualization | 4 tasks | Feature | Complete |
 | Phase 7: CLI | 4 tasks | Feature | Not Started |
 | Phase 8: Demo Examples | 5 tasks | Polish | Not Started |
 | Phase 9: Testing | 5 tasks | QA | Not Started |
-| **Total** | **44 tasks** | | **59% Complete** |
+| **Total** | **44 tasks** | | **68% Complete** |
 
 ---
 
@@ -231,7 +231,7 @@
 
 ### 6.1 HTML Generation
 
-- [ ] **T-027**: Create `rlm/visualization/html.py`
+- [x] **T-027**: Create `rlm/visualization/html.py`
   - Create `generate_html_report(result, document_text) -> str`
   - Template with:
     - Extracted data table
@@ -239,7 +239,7 @@
     - Collapsible reasoning trace
     - Confidence progress bar
 
-- [ ] **T-028**: Create `rlm/visualization/citations.py`
+- [x] **T-028**: Create `rlm/visualization/citations.py`
   - Create `highlight_citations(text, citations) -> str`
   - Wrap citation snippets in `<mark>` tags
   - Handle overlapping citations
@@ -247,12 +247,12 @@
 
 ### 6.2 Integration
 
-- [ ] **T-029**: Add `visualize()` to public API
+- [x] **T-029**: Add `visualize()` to public API
   - `rlm.visualize(result, output="report.html")`
   - Auto-open in browser option
   - Return HTML string if no output path
 
-- [ ] **T-030**: Create standalone HTML template
+- [x] **T-030**: Create standalone HTML template
   - No external dependencies (inline CSS/JS)
   - Responsive design
   - Print-friendly styles

@@ -183,9 +183,9 @@ class RLMEngine:
             verification=result.get("verification", {}),
             citations=[
                 Citation(
-                    text=c.get("snippet", ""),
+                    snippet=c.get("snippet", ""),
                     page=c.get("page", 0),
-                    context=c.get("note", "")
+                    note=c.get("note", "")
                 )
                 for c in result.get("citations", [])
             ],
@@ -278,9 +278,9 @@ class RLMEngine:
             answer=answer,
             citations=[
                 Citation(
-                    text=c.get("snippet", ""),
+                    snippet=c.get("snippet", ""),
                     page=c.get("page", 0),
-                    context=c.get("note", "")
+                    note=c.get("note", "")
                 )
                 for c in result.get("citations", [])
             ],
