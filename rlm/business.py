@@ -462,6 +462,102 @@ def extract_simple(
     )
 
 
+# --- Conversational Field Editing ---
+
+FIELD_EDIT_PROMPT = """You are helping a user select fields to extract from a document.
+
+Current fields (enabled marked with [x]):
+{field_list}
+
+User said: "{user_input}"
+
+Interpret what the user wants and respond with JSON only (no markdown):
+{{
+  "enable": ["field1", "field2"],
+  "disable": ["field3"],
+  "add": ["new_field_name"],
+  "message": "Brief confirmation of what you understood"
+}}
+
+Rules:
+- Match user intent to existing field names (e.g., "vendor info" -> vendor_name, "total" -> total_amount)
+- If user wants to ADD a field not in the list, put it in "add" with snake_case name
+- If user says "only X" or "just X", disable everything except X
+- If user says "also X" or "add X", enable X (or add if not present)
+- If user says "remove X" or "not X" or "without X", disable X
+- If user says "keep X" or "include X", enable X
+- Use snake_case for any new field names
+- Only include arrays that have items (omit empty arrays)
+- Be helpful and confirm what you understood in "message"
+"""
+
+
+def interpret_fields(
+    user_input: str,
+    current_fields: List[SuggestedField]
+) -> dict:
+    """
+    Use LLM to interpret user's natural language field request.
+
+    Args:
+        user_input: What the user said (e.g., "I need vendor and total only")
+        current_fields: Current list of SuggestedField objects
+
+    Returns:
+        dict with keys:
+            - enable: list of field names to enable
+            - disable: list of field names to disable
+            - add: list of new field names to add
+            - message: confirmation message for user
+    """
+    config = RLMConfig.from_env()
+    provider = get_provider(config.provider)
+
+    # Build field list for prompt
+    field_list = "\n".join([
+        f"{'[x]' if f.enabled else '[ ]'} {f.name}"
+        for f in current_fields
+    ])
+
+    prompt = FIELD_EDIT_PROMPT.format(
+        field_list=field_list,
+        user_input=user_input
+    )
+
+    response = provider.chat(
+        messages=[{"role": "user", "content": prompt}],
+        model=config.sub_model  # Fast model for quick response
+    )
+
+    # Parse JSON response
+    content = response["choices"][0]["message"]["content"]
+
+    # Extract JSON from response
+    try:
+        # Try to find JSON in response
+        if "```json" in content:
+            json_str = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            json_str = content.split("```")[1].split("```")[0]
+        else:
+            json_str = content
+
+        result = json.loads(json_str.strip())
+    except json.JSONDecodeError:
+        # Fallback - couldn't parse
+        result = {
+            "message": "Sorry, I didn't understand that. Try 'all', 'none', or field numbers."
+        }
+
+    # Ensure all expected keys exist
+    result.setdefault("enable", [])
+    result.setdefault("disable", [])
+    result.setdefault("add", [])
+    result.setdefault("message", "Updated fields")
+
+    return result
+
+
 # Convenience aliases
 analyze = discover
 extract = extract_simple

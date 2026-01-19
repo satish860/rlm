@@ -217,10 +217,10 @@ class InteractiveSession:
         self.state = State.FIELDS
 
     def _handle_fields(self):
-        """Show fields, let user toggle."""
+        """Show fields, let user describe what they need."""
         self._display_fields()
 
-        self.console.print("\n  Toggle fields by number, '+name' to add custom, or Enter to extract:")
+        self.console.print("\n  What fields do you need? (Enter to extract, or describe what you want)")
         user_input = Prompt.ask("  >", default="").strip()
 
         if not user_input:
@@ -232,36 +232,69 @@ class InteractiveSession:
             self.state = State.EXTRACTING
             return
 
-        if user_input.lower() == "back":
+        # Try simple commands first (fast path, no LLM)
+        if self._handle_simple_field_command(user_input):
+            return
+
+        # LLM interpretation (conversational path)
+        self._interpret_field_request(user_input)
+
+    def _handle_simple_field_command(self, user_input: str) -> bool:
+        """
+        Handle simple commands that don't need LLM.
+        Returns True if command was handled, False otherwise.
+        """
+        lower_input = user_input.lower()
+
+        # Back command
+        if lower_input == "back":
             self.state = State.WELCOME
-            return
+            return True
 
-        if user_input.lower() == "help":
+        # Help command
+        if lower_input == "help":
             self._show_field_help()
-            return
+            return True
 
-        # Toggle field by number
+        # Enable all fields
+        if lower_input == "all":
+            for f in self.analysis.suggested_fields:
+                f.enabled = True
+            self.console.print("\n  [green]All fields enabled[/green]")
+            return True
+
+        # Disable all fields
+        if lower_input == "none":
+            for f in self.analysis.suggested_fields:
+                f.enabled = False
+            self.console.print("\n  [yellow]All fields disabled[/yellow]")
+            return True
+
+        # Toggle single field by number
         if user_input.isdigit():
             idx = int(user_input) - 1
             if 0 <= idx < len(self.analysis.suggested_fields):
                 field = self.analysis.suggested_fields[idx]
                 field.enabled = not field.enabled
-                status = "enabled" if field.enabled else "disabled"
+                status = "[green]enabled[/green]" if field.enabled else "[yellow]disabled[/yellow]"
                 self.console.print(f"\n  {field.name}: {status}")
             else:
                 self.console.print(f"\n  [red]Invalid field number: {user_input}[/red]")
-            return
+            return True
 
         # Toggle multiple fields (e.g., "1 2 3" or "1,2,3")
         parts = user_input.replace(",", " ").split()
         if all(p.isdigit() for p in parts):
+            toggled = []
             for p in parts:
                 idx = int(p) - 1
                 if 0 <= idx < len(self.analysis.suggested_fields):
                     field = self.analysis.suggested_fields[idx]
                     field.enabled = not field.enabled
-            self.console.print("\n  Fields toggled")
-            return
+                    toggled.append(field.name)
+            if toggled:
+                self.console.print(f"\n  Toggled: {', '.join(toggled)}")
+            return True
 
         # Add custom field with +name
         if user_input.startswith("+"):
@@ -272,10 +305,84 @@ class InteractiveSession:
                     description=f"Custom field: {field_name}",
                     field_type="text"
                 )
-                self.console.print(f"\n  Added custom field: [green]{field_name}[/green]")
+                self.console.print(f"\n  Added: [green]{field_name}[/green]")
+            return True
+
+        return False
+
+    def _interpret_field_request(self, user_input: str):
+        """Use LLM to interpret natural language field request."""
+        self.console.print("\n  [dim]Understanding your request...[/dim]")
+
+        try:
+            result = biz.interpret_fields(
+                user_input=user_input,
+                current_fields=self.analysis.suggested_fields
+            )
+        except Exception as e:
+            self.console.print(f"\n  [red]Error: {e}[/red]")
+            self.console.print("  [dim]Try using numbers or '+field_name' instead.[/dim]")
             return
 
-        self.console.print(f"\n  [dim]Unknown command. Type 'help' for options.[/dim]")
+        changes_made = False
+
+        # Apply enable changes
+        for name in result.get("enable", []):
+            if self._enable_field_by_name(name):
+                changes_made = True
+
+        # Apply disable changes
+        for name in result.get("disable", []):
+            if self._disable_field_by_name(name):
+                changes_made = True
+
+        # Add new fields
+        for name in result.get("add", []):
+            # Clean field name
+            clean_name = name.strip().replace(" ", "_").lower()
+            if clean_name and not self._field_exists(clean_name):
+                self.analysis.add_field(
+                    name=clean_name,
+                    description=f"User requested: {clean_name}",
+                    field_type="text"
+                )
+                self.console.print(f"  Added: [green]{clean_name}[/green]")
+                changes_made = True
+
+        # Show message
+        message = result.get("message", "")
+        if message:
+            self.console.print(f"\n  {message}")
+
+        if not changes_made and not message:
+            self.console.print("\n  [dim]No changes made. Type 'help' for options.[/dim]")
+
+    def _enable_field_by_name(self, name: str) -> bool:
+        """Enable a field by name (fuzzy match). Returns True if found."""
+        name_lower = name.lower().replace(" ", "_")
+        for field in self.analysis.suggested_fields:
+            if field.name.lower() == name_lower:
+                if not field.enabled:
+                    field.enabled = True
+                    self.console.print(f"  Enabled: [green]{field.name}[/green]")
+                return True
+        return False
+
+    def _disable_field_by_name(self, name: str) -> bool:
+        """Disable a field by name (fuzzy match). Returns True if found."""
+        name_lower = name.lower().replace(" ", "_")
+        for field in self.analysis.suggested_fields:
+            if field.name.lower() == name_lower:
+                if field.enabled:
+                    field.enabled = False
+                    self.console.print(f"  Disabled: [yellow]{field.name}[/yellow]")
+                return True
+        return False
+
+    def _field_exists(self, name: str) -> bool:
+        """Check if a field with this name already exists."""
+        name_lower = name.lower()
+        return any(f.name.lower() == name_lower for f in self.analysis.suggested_fields)
 
     def _display_fields(self):
         """Show fields with checkboxes and examples."""
@@ -483,9 +590,12 @@ class InteractiveSession:
     back      - Go back to previous step
 
   [cyan]Field Selection:[/cyan]
-    1-9       - Toggle field by number
+    Describe what you need in plain English, or use quick commands:
+    "I need vendor and total"  - Natural language (uses LLM)
+    1-9       - Toggle field by number (instant)
     1 2 3     - Toggle multiple fields
     +name     - Add custom field (e.g., +po_number)
+    all/none  - Enable/disable all fields
     Enter     - Start extraction
 
   [cyan]Supported File Types:[/cyan]
@@ -503,23 +613,25 @@ class InteractiveSession:
         help_text = """
   [bold]Field Selection Help[/bold]
 
-  [cyan]Toggle Fields:[/cyan]
-    Enter a number to toggle that field on/off
-    Example: 1 (toggles first field)
+  [cyan]Natural Language (uses LLM):[/cyan]
+    "I need vendor and total only"   - Enable only those fields
+    "also add payment terms"         - Add a new field
+    "remove line items"              - Disable a field
+    "keep the date too"              - Enable a field
 
-  [cyan]Toggle Multiple:[/cyan]
-    Enter multiple numbers separated by spaces
-    Example: 1 3 5 (toggles fields 1, 3, and 5)
+  [cyan]Quick Commands (no LLM):[/cyan]
+    1, 2, 3      - Toggle field by number
+    1 2 3        - Toggle multiple fields
+    +field_name  - Add custom field (e.g., +po_number)
+    all          - Enable all fields
+    none         - Disable all fields
+    back         - Return to file selection
+    Enter        - Start extraction
 
-  [cyan]Add Custom Field:[/cyan]
-    Use + prefix to add a new field
-    Example: +purchase_order (adds purchase_order field)
-
-  [cyan]Continue:[/cyan]
-    Press Enter with no input to start extraction
-
-  [cyan]Go Back:[/cyan]
-    Type 'back' to return to file selection
+  [cyan]Tips:[/cyan]
+    - Use numbers for quick toggles (instant)
+    - Use natural language for complex changes (2-3 sec)
+    - "only X and Y" disables everything except X and Y
 """
         self.console.print(help_text)
 

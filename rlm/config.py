@@ -32,7 +32,7 @@ class RLMConfig:
 
     # Models
     root_model: str = "anthropic/claude-sonnet-4.5"
-    sub_model: str = "openai/gpt-4o-mini"
+    sub_model: str = "openai/gpt-5-mini"
 
     # Provider
     provider: str = "openrouter"
