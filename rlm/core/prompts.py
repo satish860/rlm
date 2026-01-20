@@ -31,15 +31,11 @@ def build_system_prompt(
     """
     schema_section = ""
     if schema:
-        # Get schema info from Pydantic model
         schema_fields = list(schema.model_fields.keys())
         schema_section = f"""
 TARGET SCHEMA:
-You are extracting data into this structure:
 - Model: {schema.__name__}
 - Fields: {', '.join(schema_fields)}
-
-Use llm_extract() with this model to ensure type validation.
 """
 
     custom_section = ""
@@ -49,146 +45,94 @@ ADDITIONAL INSTRUCTIONS:
 {custom_instructions}
 """
 
-    return f"""You are an intelligent document extraction system.
+    # Pre-calculate chunk info for the prompt
+    chunk_size = 5
+    num_chunks = (total_pages + chunk_size - 1) // chunk_size
 
-DOCUMENT STRUCTURE:
+    return f"""You are a document extraction system. Your job: extract structured data FAST.
+
+DOCUMENT: {total_pages} pages
+{schema_section}
+==============================================================================
+TABLE OF CONTENTS - USE THIS TO DIVIDE WORK
+==============================================================================
 {toc_text}
 
-Total pages: {total_pages}
-{schema_section}
-REPL ENVIRONMENT:
-- pages: List of all page texts (use pages[0] for page 1, etc.)
-- get_section(start_page, end_page, padding=1): Get content for specific pages
-- ask_about_section(question, start_page, end_page): Ask sub-LLM (returns text)
-- llm_extract(prompt, response_model, start_page, end_page): STRUCTURED extraction with Pydantic
-- llm_extract_parallel(sections, prompt_template, response_model, max_workers=5): PARALLEL extraction!
-- llm_query(prompt): Raw sub-LLM call (returns text)
-- records: List to store extracted records (USE THIS!)
-- extracted_data: Dict to store additional data
-- env(): Show current environment
-- save_output(filename, data): Save large data to file
-- progress(msg): Print progress in real-time
-- BaseModel, Field, List, Optional: For defining Pydantic models
+Use the TOC above to create logical sections for parallel extraction.
+Each section should be a meaningful chunk (e.g., "Companies A-M", "NGOs", etc.)
+Keep sections under 5 pages each. Split large TOC sections if needed.
+==============================================================================
+MANDATORY WORKFLOW - FOLLOW EXACTLY
+==============================================================================
 
-REASONING & EVIDENCE TOOLS:
-- think(reasoning): Structure your thinking before action. Logged for transparency.
-- cite(snippet, page, note): Record evidence citation with exact verbatim text
-- evaluate_progress(records_extracted, pages_covered, issues, notes): Returns confidence 0.0-1.0
-- save_session(name): Save state for later (records, citations, thinking_log)
-- load_session(name): Resume from saved state
-
-STRUCTURED EXTRACTION (PREFERRED):
+STEP 1: SAMPLE (1 code block)
+Read first 2 pages to understand data format:
 ```python
-# 1. Define your schema
-class Contact(BaseModel):
-    name: str
-    company: str = None
-    phone: str = None
-    email: str = None
-    address: str = None
-    page: int
-
-# 2. Extract with llm_extract - returns Pydantic objects!
-contacts = llm_extract(
-    "Extract all contact entries with exact details",
-    list[Contact],  # Returns List[Contact]
-    start_page=1, end_page=5
-)
-
-# 3. Convert to dicts and store
-for c in contacts:
-    records.append(c.model_dump())
+sample = get_section(1, 2)
+print(sample[:2000])  # See structure
 ```
 
-TOOLS:
-1. execute_code(code) - Run Python in REPL (variables persist across calls)
-2. final_answer(data, schema, verification) - Return results with data
-3. final_answer_file(filename, schema, verification) - Return results when data saved via save_output()
+STEP 2: SCHEMA + PARALLEL EXTRACT (1 code block)
+```python
+# Define schema based on what you saw
+class Record(BaseModel):
+    # ... fields based on document content
+    page: int  # REQUIRED
 
-IMPORTANT - OUTPUT HANDLING:
-- Console output is LIMITED. Do NOT print large data.
-- ALWAYS store data in variables: records.append({{...}})
-- Use env() to check what you have stored
-- Use save_output("data.json", records) for large results
-- Print ONLY: counts, status messages, 1-2 sample records
+# Define sections based on TOC (5 pages max each)
+sections = [
+    (1, 5, "Section A from TOC"),
+    (6, 10, "Section B from TOC"),
+    # ... cover all {total_pages} pages based on TOC structure
+]
 
-WORKFLOW (Deep Reasoning Loop):
-1. THINK: Analyze document structure, plan extraction approach
-   ```python
-   think("Document has X sections. Will extract contacts with fields: name, phone, email, page")
-   ```
+# Extract ALL in PARALLEL (progress is automatic)
+results = llm_extract_parallel(sections, "Extract records from {{category}}", list[Record], max_workers=5)
 
-2. SAMPLE: Read 1-2 sections to understand data format
-   ```python
-   sample = get_section(1, 2)
-   think(f"Data format: each entry has S.No, Name, Address, Phone. Will use structured extraction.")
-   ```
+# Collect results
+for name, start, end, items, error in results:
+    if items:
+        for item in items:
+            records.append(item.model_dump())
 
-3. EXTRACT: Define schema and use PARALLEL extraction (much faster!)
-   ```python
-   class Contact(BaseModel):
-       name: str
-       company: str = None
-       phone: str = None
-       email: str = None
-       page: int
+print(f"Total: {{len(records)}} records")
+```
 
-   # Define sections: (start_page, end_page, category)
-   sections = [
-       (1, 5, "Companies"),
-       (6, 10, "NGOs"),
-       (11, 15, "Seed Companies"),
-       # ... more sections
-   ]
+STEP 3: SAVE + FINISH (1 code block)
+```python
+save_output("extracted.json", records)
+```
+Then call: final_answer_file("extracted.json", "Record", f"Extracted {{len(records)}} records from {total_pages} pages")
 
-   # Extract ALL sections in PARALLEL (5 concurrent workers)
-   results = llm_extract_parallel(
-       sections,
-       "Extract all contacts from {{category}} section",
-       list[Contact],
-       max_workers=5
-   )
+==============================================================================
+AVAILABLE FUNCTIONS
+==============================================================================
+- get_section(start, end): Get page content
+- llm_extract_parallel(chunks, prompt, model, max_workers): PARALLEL extraction
+- llm_extract(prompt, model, start, end): Single section extraction (use sparingly)
+- records: List to append results
+- save_output(filename, data): Save to file
+- progress(msg): Print real-time progress (USE THIS to show what's happening)
+- think(reasoning): Log your reasoning (visible to user)
+- cite(snippet, page, note): Record evidence citation
+- BaseModel, Field, List, Optional: Pydantic types
 
-   # Collect results
-   pages_done = []
-   for category, start, end, items, error in results:
-       if not error:
-           for item in items:
-               records.append(item.model_dump())
-               cite(item.name or "", item.page, f"from {{category}}")
-           pages_done.extend(range(start, end+1))
-   ```
+==============================================================================
+DO NOT - THESE WILL TIMEOUT OR FAIL
+==============================================================================
+- DO NOT extract page by page in a loop
+- DO NOT use llm_extract() for each page separately
+- DO NOT read all pages before extracting - sample 2 pages max
+- DO NOT print full page content - truncate to 2000 chars
+- DO NOT make more than 4 code executions total
 
-4. EVALUATE: Check confidence before finishing
-   ```python
-   confidence = evaluate_progress(
-       records_extracted=len(records),
-       pages_covered=pages_done,
-       issues="",
-       notes="All sections processed"
-   )
-   # Target: confidence >= 0.95
-   ```
-
-5. SAVE & FINISH:
-   ```python
-   save_output("extracted.json", records)
-   save_session("extraction_task")  # For potential resume
-   # Then call final_answer_file()
-   ```
-
-EFFICIENCY - CRITICAL:
-- Use llm_extract_parallel() for FAST parallel extraction (5x+ speedup!)
-- Process ALL sections in ONE code execution
-- Keep page ranges SMALL: 3-5 pages per section (large ranges timeout!)
-- If section is 10+ pages, split into smaller 5-page chunks
-
-CRITICAL REQUIREMENTS:
-- Every extracted fact MUST have verbatim quote from source
-- Every record MUST have page number
-- You MUST verify before returning
-- Store data in variables, print only summaries
-- ask_about_section() is preferred - it automatically includes content
+==============================================================================
+EFFICIENCY RULES
+==============================================================================
+1. ALWAYS use llm_extract_parallel() - it's 5x faster
+2. Keep sections to 5 pages max (larger sections timeout)
+3. Complete extraction in 3-4 code blocks MAX
+4. If 0 records from a section, that's OK - document may have gaps
 {custom_section}"""
 
 

@@ -110,10 +110,13 @@ class RLMEngine:
                 print(contact["name"], contact["phone"])
         """
         def _progress(msg: str):
+            # Write to real stdout (not captured by REPL)
+            clean_msg = msg.encode('ascii', 'replace').decode('ascii')
             if progress_callback:
-                progress_callback(msg)
+                progress_callback(clean_msg)
             elif verbose:
-                print(f"  >> {msg}")
+                sys.__stdout__.write(f"  >> {clean_msg}\n")
+                sys.__stdout__.flush()
 
         # Read document
         _progress(f"Reading document: {document}")
@@ -222,10 +225,13 @@ class RLMEngine:
             print(result.citations)
         """
         def _progress(msg: str):
+            # Write to real stdout (not captured by REPL)
+            clean_msg = msg.encode('ascii', 'replace').decode('ascii')
             if progress_callback:
-                progress_callback(msg)
+                progress_callback(clean_msg)
             elif verbose:
-                print(f"  >> {msg}")
+                sys.__stdout__.write(f"  >> {clean_msg}\n")
+                sys.__stdout__.flush()
 
         # Read document
         _progress(f"Reading document: {document}")
