@@ -1,16 +1,17 @@
 """
-RLM PDF Reader - Read PDF documents using markitdown or fallback methods.
+RLM PDF Reader - Read PDF documents using Mistral OCR or fallback methods.
 
-Primary method: markitdown (high quality, converts to Markdown)
-Fallback methods: pymupdf, pdfplumber (basic text extraction)
+Primary method: mistral (high quality OCR using Mistral API)
+Fallback methods: markitdown, pymupdf, pdfplumber
 
 Example:
     from rlm.document.formats.pdf import PDFReader
 
     reader = PDFReader()
-    text = reader.read("document.pdf")
+    text = reader.read("document.pdf")  # Uses Mistral OCR
 
     # Use specific method
+    text = reader.read("document.pdf", method="markitdown")
     text = reader.read("document.pdf", method="pymupdf")
 """
 
@@ -26,7 +27,8 @@ class PDFReader:
     PDF document reader with multiple backend support.
 
     Methods:
-    - markitdown: High quality conversion to Markdown (default)
+    - mistral: High quality OCR using Mistral API (default)
+    - markitdown: Conversion to Markdown using markitdown
     - pymupdf: Fast text extraction using PyMuPDF/fitz
     - pdfplumber: Alternative text extraction
     """
@@ -36,17 +38,17 @@ class PDFReader:
         Initialize PDF reader.
 
         Args:
-            converter: Custom converter to use (default: markitdown)
+            converter: Custom converter to use (default: mistral)
         """
         self.converter = converter
 
-    def read(self, path: str, method: str = "markitdown") -> str:
+    def read(self, path: str, method: str = "mistral") -> str:
         """
         Read PDF and convert to text.
 
         Args:
             path: Path to PDF file
-            method: Extraction method - "markitdown", "pymupdf", or "pdfplumber"
+            method: Extraction method - "mistral", "markitdown", "pymupdf", or "pdfplumber"
 
         Returns:
             Extracted text content
@@ -61,7 +63,9 @@ class PDFReader:
         if path.suffix.lower() != ".pdf":
             raise DocumentError(f"Not a PDF file: {path}")
 
-        if method == "markitdown":
+        if method == "mistral":
+            return self._read_with_mistral(path)
+        elif method == "markitdown":
             return self._read_with_markitdown(path)
         elif method == "pymupdf":
             return self._read_with_pymupdf(path)
@@ -69,6 +73,11 @@ class PDFReader:
             return self._read_with_pdfplumber(path)
         else:
             raise DocumentError(f"Unknown PDF method: {method}")
+
+    def _read_with_mistral(self, path: Path) -> str:
+        """Read PDF using Mistral OCR."""
+        converter = self.converter or get_converter("mistral")
+        return converter.convert(str(path))
 
     def _read_with_markitdown(self, path: Path) -> str:
         """Read PDF using markitdown converter."""
@@ -115,13 +124,13 @@ class PDFReader:
             raise DocumentError(f"pdfplumber extraction failed: {e}")
 
 
-def read_pdf(path: str, method: str = "markitdown") -> str:
+def read_pdf(path: str, method: str = "mistral") -> str:
     """
     Convenience function to read a PDF file.
 
     Args:
         path: Path to PDF file
-        method: Extraction method (default: "markitdown")
+        method: Extraction method (default: "mistral")
 
     Returns:
         Extracted text content

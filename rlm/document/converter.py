@@ -2,18 +2,20 @@
 RLM Document Converter - Abstract interface for document conversion.
 
 This module provides an open interface for document conversion that can be
-extended with different backends (markitdown, Mistral, custom LLMs, etc.)
+extended with different backends (Mistral OCR, markitdown, custom LLMs, etc.)
 
 Example:
-    # Use default markitdown converter
-    converter = get_converter("markitdown")
+    # Use default Mistral converter
+    converter = get_converter("mistral")
     text = converter.convert("document.pdf")
 
-    # Register custom converter
-    register_converter("mistral", MistralConverter)
-    converter = get_converter("mistral")
+    # Use markitdown
+    converter = get_converter("markitdown")
+    text = converter.convert("document.pdf")
 """
 
+import os
+import base64
 from abc import ABC, abstractmethod
 from typing import Dict, Type, Optional, Any
 from pathlib import Path
@@ -142,6 +144,145 @@ class MarkitdownConverter(BaseConverter):
         ]
 
 
+class MistralConverter(BaseConverter):
+    """
+    Document converter using Mistral's dedicated OCR API.
+
+    Uses mistral-ocr-latest model for high-quality document OCR.
+    Supports PDFs and images with table extraction and layout preservation.
+
+    Requires: MISTRAL_API_KEY environment variable or pass api_key to constructor.
+    Install: pip install mistralai
+    """
+
+    # Default API key (can be overridden via env var or constructor)
+    DEFAULT_API_KEY = "S5FhVwZ42xTGYrXo29xmbGpDegHY4zHh"
+
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or os.getenv("MISTRAL_API_KEY", self.DEFAULT_API_KEY)
+        self.model = "mistral-ocr-latest"
+        self._client = None
+
+    def _get_client(self):
+        """Lazy load Mistral client."""
+        if self._client is None:
+            try:
+                from mistralai import Mistral
+                self._client = Mistral(api_key=self.api_key)
+            except ImportError:
+                raise DocumentError(
+                    "mistralai not installed. Install with: pip install mistralai"
+                )
+        return self._client
+
+    def convert(self, path: str, **kwargs) -> str:
+        """
+        Convert document to text using Mistral OCR API.
+
+        Args:
+            path: Path to document (PDF or image)
+            **kwargs: Additional options
+
+        Returns:
+            Extracted text content in markdown format
+        """
+        path = Path(path)
+        if not path.exists():
+            raise DocumentError(f"File not found: {path}")
+
+        ext = path.suffix.lower()
+
+        if ext == ".pdf":
+            return self._convert_pdf(path)
+        elif ext in [".jpg", ".jpeg", ".png", ".avif", ".gif", ".bmp", ".webp"]:
+            return self._convert_image(path)
+        else:
+            raise DocumentError(f"Unsupported format for Mistral OCR: {ext}")
+
+    def _convert_pdf(self, path: Path) -> str:
+        """Convert PDF using Mistral OCR API."""
+        client = self._get_client()
+
+        # Read and encode PDF as base64
+        with open(path, "rb") as f:
+            pdf_bytes = f.read()
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+        try:
+            from mistralai.models import DocumentURLChunk
+
+            ocr_response = client.ocr.process(
+                model=self.model,
+                document=DocumentURLChunk(
+                    document_url=f"data:application/pdf;base64,{pdf_b64}"
+                ),
+                include_image_base64=False
+            )
+
+            # Extract text from all pages
+            all_text = []
+            for i, page in enumerate(ocr_response.pages, 1):
+                page_text = page.markdown if hasattr(page, 'markdown') else str(page)
+                all_text.append(f"--- Page {i} ---\n{page_text}")
+
+            return "\n\n".join(all_text)
+
+        except Exception as e:
+            raise DocumentError(f"Mistral OCR failed: {e}")
+
+    def _convert_image(self, path: Path) -> str:
+        """Convert image using Mistral OCR API."""
+        client = self._get_client()
+
+        # Read and encode image as base64
+        with open(path, "rb") as f:
+            img_bytes = f.read()
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
+        # Determine mime type
+        ext = path.suffix.lower()
+        mime_types = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".avif": "image/avif",
+            ".bmp": "image/bmp",
+        }
+        mime_type = mime_types.get(ext, "image/png")
+
+        try:
+            from mistralai.models import ImageURLChunk
+
+            ocr_response = client.ocr.process(
+                model=self.model,
+                document=ImageURLChunk(
+                    image_url=f"data:{mime_type};base64,{img_b64}"
+                ),
+                include_image_base64=False
+            )
+
+            # Extract text from response
+            if hasattr(ocr_response, 'pages') and ocr_response.pages:
+                return ocr_response.pages[0].markdown
+            elif hasattr(ocr_response, 'markdown'):
+                return ocr_response.markdown
+            else:
+                return str(ocr_response)
+
+        except Exception as e:
+            raise DocumentError(f"Mistral OCR failed: {e}")
+
+    @property
+    def name(self) -> str:
+        return "mistral"
+
+    @property
+    def supported_formats(self) -> list:
+        return [".pdf", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".avif"]
+
+
 class PlainTextConverter(BaseConverter):
     """
     Simple converter that reads plain text files.
@@ -189,12 +330,13 @@ class PlainTextConverter(BaseConverter):
 
 # Registry of available converters
 _converters: Dict[str, Type[BaseConverter]] = {
+    "mistral": MistralConverter,
     "markitdown": MarkitdownConverter,
     "plaintext": PlainTextConverter,
 }
 
 # Default converter to use
-_default_converter: str = "markitdown"
+_default_converter: str = "mistral"
 
 
 def register_converter(name: str, converter_class: Type[BaseConverter]) -> None:
@@ -215,7 +357,7 @@ def get_converter(name: str = None) -> BaseConverter:
     Get a converter instance by name.
 
     Args:
-        name: Converter name (default: "markitdown")
+        name: Converter name (default: "mistral")
 
     Returns:
         BaseConverter instance

@@ -41,14 +41,14 @@ class DocumentReader:
     Example:
         reader = DocumentReader()
 
-        # Auto-detect format
+        # Auto-detect format (uses Mistral OCR for PDFs)
         text = reader.read("document.pdf")
 
         # Specify PDF method
         text = reader.read("document.pdf", method="pymupdf")
 
-        # Use custom converter
-        reader = DocumentReader(converter="mistral")
+        # Use markitdown instead
+        reader = DocumentReader(converter="markitdown")
         text = reader.read("document.pdf")
     """
 
@@ -64,8 +64,8 @@ class DocumentReader:
         Initialize document reader.
 
         Args:
-            converter: Converter name (e.g., "markitdown", "mistral") or
-                      BaseConverter instance. Default: "markitdown"
+            converter: Converter name (e.g., "mistral", "markitdown") or
+                      BaseConverter instance. Default: "mistral"
         """
         if isinstance(converter, str):
             self._converter = get_converter(converter)
@@ -101,7 +101,7 @@ class DocumentReader:
 
         # PDF files
         if ext in self.PDF_EXTENSIONS:
-            return self._pdf_reader.read(str(path), method=method or "markitdown")
+            return self._pdf_reader.read(str(path), method=method or "mistral")
 
         # Markdown files
         if ext in self.MARKDOWN_EXTENSIONS:
@@ -161,9 +161,9 @@ def read_document(
 
     Args:
         path: Path to document file
-        method: For PDFs - "markitdown" (default), "pymupdf", or "pdfplumber"
+        method: For PDFs - "mistral" (default), "markitdown", "pymupdf", or "pdfplumber"
         encoding: For text files - specific encoding (default: auto-detect)
-        converter: Converter to use (default: "markitdown")
+        converter: Converter to use (default: "mistral")
 
     Returns:
         Document text content
@@ -172,14 +172,14 @@ def read_document(
         DocumentError: If format unsupported or reading fails
 
     Example:
-        # Simple usage
+        # Simple usage (uses Mistral OCR)
         text = read_document("report.pdf")
 
         # Specify PDF extraction method
         text = read_document("report.pdf", method="pymupdf")
 
-        # Use custom converter (for future Mistral support)
-        text = read_document("report.pdf", converter="mistral")
+        # Use markitdown converter
+        text = read_document("report.pdf", converter="markitdown")
     """
     reader = DocumentReader(converter=converter)
     return reader.read(path, method=method, encoding=encoding)
